@@ -1,0 +1,1571 @@
+{
+  "metadata": {
+    "dataset_name": "VALIDATION",
+    "generator_version": "1.0.0",
+    "random_seed": 42,
+    "generation_id": "7bd230ad-6034-413f-a5c0-c67cdedf3652",
+    "record_counts": {
+      "erp": 113,
+      "rzp": 113,
+      "bank": 98,
+      "groups": 100
+    },
+    "scenario_counts": {
+      "CLEAN_1_TO_1": 78,
+      "TRUNCATED_REFERENCE": 5,
+      "TIMING_SKEW": 5,
+      "MISSING_RECORD": 2,
+      "CONSOLIDATED_REFUNDS": 2,
+      "FEE_DISCREPANCY": 5,
+      "CONSOLIDATED_1_TO_N": 3
+    }
+  },
+  "groups": [
+    {
+      "group_id": "f956be95-3b96-4c74-ffe6-299495804c2a",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "3dbc3093-a828-4442-3f73-8f5019a2676f"
+      ],
+      "rzp_record_ids": [
+        "ca8e858c-d0f8-1063-889f-e107443b1d0f"
+      ],
+      "bank_record_ids": [
+        "c398c332-0e50-0785-bcaf-f931ead18464"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "2c78644f-d860-65a2-fdd5-b0f8d6d744fd",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ce63cb1a-5168-bbf2-97af-5bde3c8e9d78"
+      ],
+      "rzp_record_ids": [
+        "e9fa97e2-5bd9-3609-b297-a782bcf474aa"
+      ],
+      "bank_record_ids": [
+        "b357f3f9-b415-7cea-0738-8ba49770a3db"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "e1b243cc-cf76-7343-fced-f994d631c383",
+      "scenario": "TRUNCATED_REFERENCE",
+      "erp_record_ids": [
+        "7d8d3ddd-2cf1-49cb-4f1e-1a378ac8ad93"
+      ],
+      "rzp_record_ids": [
+        "3b8d3447-0e61-065f-171b-1b8009b7fdf7"
+      ],
+      "bank_record_ids": [
+        "86c5547c-051a-0039-3803-dcee9a069295"
+      ],
+      "expected_outcome": "MATCH_PARTIAL_REF",
+      "metadata": {}
+    },
+    {
+      "group_id": "2d6e0291-b789-3986-573b-fc172167c35e",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "962c04dd-25d0-7461-059c-15740f3f0f48"
+      ],
+      "rzp_record_ids": [
+        "c63ce21d-2443-5958-eacf-33a9b466fab6"
+      ],
+      "bank_record_ids": [
+        "dc54d59b-86bb-42c7-d8b2-f8b61c654aa2"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "52961fb3-4d40-7b28-5628-ddcd19dd3e8c",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "f2dd9456-bb7b-6c05-2852-2ca2f9d2014a"
+      ],
+      "rzp_record_ids": [
+        "f5edf382-a3a6-ef83-cab6-31076fd69b3a"
+      ],
+      "bank_record_ids": [
+        "2c988bca-5139-7c06-a630-ad9d7cb923f5"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "60ddc7f1-2ce3-d822-d080-12b896c56fe7",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "2099e71f-4b65-7bcc-b041-6f19bbe71835"
+      ],
+      "rzp_record_ids": [
+        "f2e3c6f0-0075-d3d5-ba94-aa662d7e4a45"
+      ],
+      "bank_record_ids": [
+        "643ffdae-92a5-4d04-f2dd-e1f5b3b6d344"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "a3bfe403-388c-9751-9c83-79aef7b02805",
+      "scenario": "TIMING_SKEW",
+      "erp_record_ids": [
+        "2401342a-7f05-fbf5-efca-c5771aa6f7cb"
+      ],
+      "rzp_record_ids": [
+        "3ced4d1f-13eb-22c9-bece-d21a54c7743b"
+      ],
+      "bank_record_ids": [
+        "2afaab7b-51cb-f9e5-fb7d-3ba158c88c48"
+      ],
+      "expected_outcome": "MATCH_DELAYED",
+      "metadata": {
+        "delay_days": 10
+      }
+    },
+    {
+      "group_id": "b173fcdf-3fe1-e8f3-35ad-de8843e4f668",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "1ba827c6-c97a-24ad-41b4-55b859b9222c"
+      ],
+      "rzp_record_ids": [
+        "62ccc604-0c53-644b-0053-f649b86d066b"
+      ],
+      "bank_record_ids": [
+        "f8170ebf-6b6e-64c5-bb8a-a843702f31e5"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "7abfcebf-d42c-b1ae-19f7-38cb6016c743",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "39bfca38-afe9-be90-c21c-3fb3a6a5f0ff"
+      ],
+      "rzp_record_ids": [
+        "cc9803de-12de-9e5a-7387-928a29a3db6d"
+      ],
+      "bank_record_ids": [
+        "0523d4fd-4b7f-2183-088d-bd82d883e3f8"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "13335bc9-bb63-5ff5-2931-0971601e0211",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "17d5b563-fa60-ede1-e5eb-772df11c0ac5"
+      ],
+      "rzp_record_ids": [
+        "9d17d218-fc3b-0de5-9812-62ac5683ede0"
+      ],
+      "bank_record_ids": [
+        "07ef2ba8-b45a-6ab3-7b94-a34de4aa786d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "349ef4a9-54c2-9d5c-19ec-08290db5d441",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "b8d77d2f-8dda-4ff2-b27b-7bb468c690b2"
+      ],
+      "rzp_record_ids": [
+        "43e8644b-8a45-a905-badf-9397ecf26429"
+      ],
+      "bank_record_ids": [
+        "3ccff6eb-4c22-72f3-4811-e562a91cf192"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "00fa0eb4-5c5f-48d4-0df4-07b82751ab86",
+      "scenario": "MISSING_RECORD",
+      "erp_record_ids": [
+        "18d42238-331d-e35c-7af6-cd4199a7b99b"
+      ],
+      "rzp_record_ids": [
+        "a3607681-2bbb-a89d-34fa-dee106969d48"
+      ],
+      "bank_record_ids": [],
+      "expected_outcome": "MISSING_DATA",
+      "metadata": {
+        "missing_source": "BANK"
+      }
+    },
+    {
+      "group_id": "7d3572cc-788f-d0cd-65c0-6b93c8edabdd",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "8b4bd7e7-a451-5ae0-1754-bf0843d75413"
+      ],
+      "rzp_record_ids": [
+        "e2afa629-5efb-336e-2f54-60336334fa2a"
+      ],
+      "bank_record_ids": [
+        "721e5419-2fc3-e649-5e91-1b9161a66444"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "26b07ff6-0fc7-9913-9072-76ea44c07a9a",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "5802b640-ab0b-4cc5-15f0-ea1918c180d2"
+      ],
+      "rzp_record_ids": [
+        "f8802878-69fb-0763-8a9c-66f7cee4e512"
+      ],
+      "bank_record_ids": [
+        "8db8dadf-3a3e-46b0-96f8-4ff7c1a72883"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "efb56207-ddec-c40b-afe3-af13891778e8",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "79ec533c-3c53-090e-e1b4-1171929d674d"
+      ],
+      "rzp_record_ids": [
+        "e71c681a-6511-e61a-1436-65f54c819260"
+      ],
+      "bank_record_ids": [
+        "8089b8c5-08e3-f771-b6dc-bd05da9bccc1"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c1d71f4a-f302-5d16-1eca-cae925bf213d",
+      "scenario": "CONSOLIDATED_REFUNDS",
+      "erp_record_ids": [
+        "140ff589-6c62-4c2c-0aec-cec7204db9da",
+        "ba236c22-e92a-7b97-51db-1a374204d733",
+        "7549c9f9-850a-48d4-46b5-18dedb4bb8eb"
+      ],
+      "rzp_record_ids": [
+        "33b0fb53-6f75-ee8a-aee1-4f87fcffe9e3",
+        "16476e3f-1127-b207-ceae-1325ea074d80",
+        "c95b61f8-032a-461a-df9b-7c1feacb1f6d"
+      ],
+      "bank_record_ids": [
+        "c81c8d31-85c6-9fbf-966b-62ea9f80b96b"
+      ],
+      "expected_outcome": "MATCH_REFUND",
+      "metadata": {}
+    },
+    {
+      "group_id": "910c4cb7-25f0-6b0a-264e-f59d6a18e5af",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "f08ce6c2-f6ff-3521-c225-0530952a5345"
+      ],
+      "rzp_record_ids": [
+        "900c0af7-1b0a-e22e-ecc8-17a619a6f80e"
+      ],
+      "bank_record_ids": [
+        "493d6196-c926-a021-19da-8262c7903dc5"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "099759a3-7919-955c-9be4-f19f92701d60",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "9e45455e-24d3-8751-6729-4d3c46818a88"
+      ],
+      "rzp_record_ids": [
+        "66d71d97-b193-c8b8-ae49-c0799bd0d4c7"
+      ],
+      "bank_record_ids": [
+        "e1035e1c-e3bb-22ae-6552-ac5309eda6f5"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "052dfb9a-5f58-4603-e5a3-d8e944c1f1b5",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "4f9a5f98-4d95-0273-cb2c-c805d1403430"
+      ],
+      "rzp_record_ids": [
+        "dbb54645-7dda-c1b6-d7c4-caed47c4cc51"
+      ],
+      "bank_record_ids": [
+        "f8f58a26-1924-c644-af52-7666b23909f4"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "6ab19e15-ba92-992e-44f8-b53c52246d05",
+      "scenario": "FEE_DISCREPANCY",
+      "erp_record_ids": [
+        "711456de-301c-8db3-16db-80dba543148e"
+      ],
+      "rzp_record_ids": [
+        "683c510e-d2ef-a93b-e9d6-bb7e361db014"
+      ],
+      "bank_record_ids": [
+        "84396fc0-c26e-2706-7c05-9799bdae8eff"
+      ],
+      "expected_outcome": "MISMATCH_FEE",
+      "metadata": {
+        "discrepancy": 181
+      }
+    },
+    {
+      "group_id": "d9ee7dc9-c7cf-eca8-22b9-f24c67443fb8",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "2c7a0d31-0769-2583-9194-821ee11bf0d4"
+      ],
+      "rzp_record_ids": [
+        "3362d476-d53a-e57f-e00b-d5343158f1fb"
+      ],
+      "bank_record_ids": [
+        "08775804-3fde-9814-0ec0-ad4bd6441a9d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "659e0258-814f-f657-76d7-0561d2d14ef5",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "07d2fd4d-ae61-716a-1fb6-21aeec4e8cbb"
+      ],
+      "rzp_record_ids": [
+        "98133da1-7d21-20ad-5f59-fb4d3defa7ba"
+      ],
+      "bank_record_ids": [
+        "ded7d3ef-f5e4-a9c1-2d76-1ffa7233d5af"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "d4b3e8cf-bfbb-eab3-4237-8962e4fd6c34",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "0cb5ee5c-62f5-f7c2-0706-fec248fa4e98"
+      ],
+      "rzp_record_ids": [
+        "c7a2f280-927f-8103-da94-08c029b44cb1"
+      ],
+      "bank_record_ids": [
+        "38aa76df-db6b-a39b-36dd-9529f704d72f"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c7c1fb1b-dd58-631b-0522-26b983666636",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "21df5609-e959-137f-795e-6f2b02472360"
+      ],
+      "rzp_record_ids": [
+        "cd0579e2-99e4-704c-2c56-e0cda5ba2472"
+      ],
+      "bank_record_ids": [
+        "9bbc6cbc-409c-a8f2-3948-fe22022aadda"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "7580e4e9-5945-0186-da01-8d296060b1eb",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ad5cba24-4d59-616b-7779-857f37dc8c78"
+      ],
+      "rzp_record_ids": [
+        "65abc9ff-9fa4-a627-d306-08be8548867b"
+      ],
+      "bank_record_ids": [
+        "82f29004-01e1-87d8-1a31-204495a0f356"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "af35b30b-4c68-eb17-485d-831c9beab529",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "fd053963-5616-af7e-1057-a0027b53359e"
+      ],
+      "rzp_record_ids": [
+        "dc8ab6a7-533c-2ed5-a3fe-047946c79b36"
+      ],
+      "bank_record_ids": [
+        "b60a3dcc-a7f7-7451-42da-860946e1ee40"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "db7904e0-ce30-a61d-0e88-c8ece651e3e1",
+      "scenario": "FEE_DISCREPANCY",
+      "erp_record_ids": [
+        "ae46024d-51d0-5ef3-a918-83fc6772fe9f"
+      ],
+      "rzp_record_ids": [
+        "a7c854e4-0684-3c86-b8a6-040223d26b8d"
+      ],
+      "bank_record_ids": [
+        "4269c28c-4bac-bedf-ff5a-229e7f53d344"
+      ],
+      "expected_outcome": "MISMATCH_FEE",
+      "metadata": {
+        "discrepancy": 118
+      }
+    },
+    {
+      "group_id": "a36884f5-88dd-d880-afb2-8b3d38eccb4d",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "5bc677ca-abff-9286-f0cf-9d73e8121ef0"
+      ],
+      "rzp_record_ids": [
+        "2b843ef3-d86d-655d-4cd9-916481df62f4"
+      ],
+      "bank_record_ids": [
+        "8ee9581a-e061-f65f-a859-6f8cd73418fe"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c34e9baf-8f1c-b2cc-ceef-9fa8b9a5d4d0",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "55ec024a-e64b-9b37-ae01-a122f269921c"
+      ],
+      "rzp_record_ids": [
+        "5af3da5a-38e5-9b27-16dc-5a6ea7890770"
+      ],
+      "bank_record_ids": [
+        "4e9d23e9-df16-2ec3-be84-8aa2392c04da"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "787515b9-1e26-ed31-d9e9-275876b90436",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "948f664a-9565-257b-a267-d32fddcbf4bc"
+      ],
+      "rzp_record_ids": [
+        "78e36397-123b-31cf-9ee3-39fff1bdb598"
+      ],
+      "bank_record_ids": [
+        "1eac41d9-801f-4909-31cd-9f6ee3b16d36"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "fe0a824e-232a-5e82-2699-6aabdaaf7529",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "91c46efc-fcb8-96bb-68c0-cbef57b936b0"
+      ],
+      "rzp_record_ids": [
+        "752366ce-fc95-0bba-e818-4f34e4917f7d"
+      ],
+      "bank_record_ids": [
+        "b7360c4f-dcc5-d975-50fe-819924aa5685"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "0ed9fa95-a26e-865b-503b-e7882d445af8",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "c2dd901d-359a-1533-4605-ec0e73b9c2ac"
+      ],
+      "rzp_record_ids": [
+        "c3b534db-9387-03c9-2b29-bf36c606ddc4"
+      ],
+      "bank_record_ids": [
+        "c37944c1-c903-94ea-7d54-ec82288f3435"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "62210670-7a36-e788-f71f-b9a66dd49c96",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "bb0c7919-330c-cff5-88a5-fa0d09a85dc5"
+      ],
+      "rzp_record_ids": [
+        "e45a87e8-039a-8ed5-f337-b2615f8392d5"
+      ],
+      "bank_record_ids": [
+        "87f1d48c-d54e-7948-c1c0-c5e3527c8f50"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "58274e80-e082-1918-b18a-d67d39ec8ca1",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "80daa8ca-6230-5d27-1a4b-160621019bff"
+      ],
+      "rzp_record_ids": [
+        "10b6a662-2ac1-d5ca-4e5d-8f1296b31f4a"
+      ],
+      "bank_record_ids": [
+        "f2ce7eeb-4c56-fb8f-0bb4-32b3d2e76deb"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "fed747be-afd0-d2f7-e352-44446f04af36",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "7d7c59a5-e6c1-1650-ff02-f5b057bd56c9"
+      ],
+      "rzp_record_ids": [
+        "2a35ce30-303c-b04b-c007-93365bf7dda1"
+      ],
+      "bank_record_ids": [
+        "cfdfc6f9-eb0f-827c-e82a-3879f2b5a7ea"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "96f61c09-059c-1ba0-bbec-721d3610901c",
+      "scenario": "CONSOLIDATED_REFUNDS",
+      "erp_record_ids": [
+        "e0653245-600c-9c71-0990-a647cac8d87e",
+        "050dcbfe-d60b-f603-a750-350e1bad52a8",
+        "349b5089-2733-5670-b3ad-a2ba797209c0",
+        "9b0ada0b-9f6f-acc1-451d-38fe8532fc74"
+      ],
+      "rzp_record_ids": [
+        "88e44a48-c570-9e30-417b-6634a3ec152c",
+        "6ab1cdb6-1da4-66fe-b093-70850c5921f8",
+        "0261c87a-a15c-159a-af8c-a888b1f81ad9",
+        "d4a5a81e-6b38-2a0a-231d-260bb362cd55"
+      ],
+      "bank_record_ids": [
+        "9e21741f-b801-1026-82f7-38611adba8cf"
+      ],
+      "expected_outcome": "MATCH_REFUND",
+      "metadata": {}
+    },
+    {
+      "group_id": "7f6bd3c6-1b34-1937-c8e6-09391d2fed2a",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "435391b2-c728-50c1-3322-c68b9be78aec"
+      ],
+      "rzp_record_ids": [
+        "33a0daa7-f91e-5fcd-85ec-e729d4dd1b56"
+      ],
+      "bank_record_ids": [
+        "4b9c22f4-68e5-c8cd-b414-6e4a5ba0c3e0"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "3c088990-54a2-7051-7b0c-cad9eee13cae",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "e8294a67-16c8-e3d7-abf0-263e03438b64"
+      ],
+      "rzp_record_ids": [
+        "ab450578-92fb-acf6-d5d1-c6691c453357"
+      ],
+      "bank_record_ids": [
+        "170fa87b-f30e-e4fe-262e-55597e7d9a19"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "fd1935cc-74ed-a60e-3b2d-520ba4f34185",
+      "scenario": "TIMING_SKEW",
+      "erp_record_ids": [
+        "198d13a4-0cd2-0e43-76da-e194439db29d"
+      ],
+      "rzp_record_ids": [
+        "0a190939-dfc7-ab26-2cb9-41fcd02c75f9"
+      ],
+      "bank_record_ids": [
+        "cd3566ef-5c37-0739-4a62-9c5eda2cf852"
+      ],
+      "expected_outcome": "MATCH_DELAYED",
+      "metadata": {
+        "delay_days": 6
+      }
+    },
+    {
+      "group_id": "da1c96ae-0279-e2ab-0bbf-6334e3ea2d7f",
+      "scenario": "CONSOLIDATED_1_TO_N",
+      "erp_record_ids": [
+        "9f2ebefc-f480-b91e-700e-0efce4ffc31a",
+        "4596da75-74df-b83f-f659-f1886676cc75",
+        "b9f6143b-b238-3056-21ec-47541cf14654"
+      ],
+      "rzp_record_ids": [
+        "17cba85d-bbaa-574f-e0e3-c5ce44afecb7",
+        "d9c59cd9-b09d-721b-62be-4009d5f0fb6a",
+        "d8274fc3-f145-8426-fb48-1ded0f037337"
+      ],
+      "bank_record_ids": [
+        "973b6977-e946-2820-6a80-cac21a8cf13c"
+      ],
+      "expected_outcome": "MATCH_CONSOLIDATED",
+      "metadata": {}
+    },
+    {
+      "group_id": "2e671784-702b-7014-adab-2c2f91a646da",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "9c81fc46-5bcd-236c-c777-4fae613758c3"
+      ],
+      "rzp_record_ids": [
+        "e1446b45-af39-0a9d-dcd1-c4130760801f"
+      ],
+      "bank_record_ids": [
+        "e44a913a-f933-a9fa-ba2e-eeb3d6aa5382"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "a7ac590c-42f9-0f92-1036-ca810bc4d7ba",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ad8cbfea-de4b-061e-b45e-9463032a09e0"
+      ],
+      "rzp_record_ids": [
+        "939f44eb-be5e-215e-c47c-c30b865a7766"
+      ],
+      "bank_record_ids": [
+        "fa575cea-3957-1344-90a4-a421b9493906"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "ba05dd0f-a966-0a5a-6ecf-1ed21861c9f3",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ad21b4cc-a9e8-f0d8-5883-09de7b5fbe41"
+      ],
+      "rzp_record_ids": [
+        "d6cade2c-260e-37cc-6287-4624a4331510"
+      ],
+      "bank_record_ids": [
+        "fcdfe961-e45e-2ad0-8eef-a5ddd3916dcf"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "7eef09ab-da14-3a47-7823-51d9d94df188",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "52150ed8-7ddc-a413-c05d-b774132a5e58"
+      ],
+      "rzp_record_ids": [
+        "47354e4f-f85b-6d0a-54b5-86353dab1614"
+      ],
+      "bank_record_ids": [
+        "8ced4707-3903-4b65-81c6-1eeb0ce3c8c8"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "72b696ca-92b2-6acd-cd1f-75a371b65ca1",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "50e96888-7273-0e7b-7f9a-d277db496e6d"
+      ],
+      "rzp_record_ids": [
+        "bec7fb11-7f53-dc0a-fb0d-3cda1e639261"
+      ],
+      "bank_record_ids": [
+        "6747d24a-1a46-d536-048c-8480a7437402"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "9e7b1e95-f692-641a-9aad-10cecab24f24",
+      "scenario": "MISSING_RECORD",
+      "erp_record_ids": [
+        "57423882-f34a-7949-74ca-0ad7abe5be96"
+      ],
+      "rzp_record_ids": [
+        "d10bf4dc-0de4-faf4-d347-94cc5d04032d"
+      ],
+      "bank_record_ids": [],
+      "expected_outcome": "MISSING_DATA",
+      "metadata": {
+        "missing_source": "BANK"
+      }
+    },
+    {
+      "group_id": "a83c1c2b-b776-e729-791f-49f699966612",
+      "scenario": "FEE_DISCREPANCY",
+      "erp_record_ids": [
+        "18f1a1e4-1d30-a290-73d9-2aceb7461b72"
+      ],
+      "rzp_record_ids": [
+        "008ffab9-38c4-6b38-a8ae-57b9c262cad0"
+      ],
+      "bank_record_ids": [
+        "a2379e6f-d473-4534-5aea-635257632e1e"
+      ],
+      "expected_outcome": "MISMATCH_FEE",
+      "metadata": {
+        "discrepancy": 459
+      }
+    },
+    {
+      "group_id": "b783e1d5-d264-04b9-23f4-7a557e0f60b2",
+      "scenario": "TIMING_SKEW",
+      "erp_record_ids": [
+        "3227e8d8-9c60-c81b-4119-1aa71b61d453"
+      ],
+      "rzp_record_ids": [
+        "da296905-ee22-a70b-1ee9-32603002d831"
+      ],
+      "bank_record_ids": [
+        "d315fafa-7500-f785-3730-dfba6494dd5c"
+      ],
+      "expected_outcome": "MATCH_DELAYED",
+      "metadata": {
+        "delay_days": 11
+      }
+    },
+    {
+      "group_id": "96bc532d-ac11-7bab-d664-2fe8a21c0c06",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "75175f39-7354-44fb-e44a-0371c5ab4e57"
+      ],
+      "rzp_record_ids": [
+        "811317a8-f4c8-e393-96dd-6c82a8909e31"
+      ],
+      "bank_record_ids": [
+        "011c4544-7fb3-3be5-f6bf-2f7222778161"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "82221ad3-eca3-91d4-7ba1-6dd795ca788d",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "bb01b2a5-2c74-5800-941c-23fab11af726"
+      ],
+      "rzp_record_ids": [
+        "632d0302-1a82-833c-20dd-a0ffd0b3d752"
+      ],
+      "bank_record_ids": [
+        "e1f85b33-9b2d-5a2a-99bd-6240a8535961"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "65daced0-460a-6125-3f8c-93d4c32afc4a",
+      "scenario": "TIMING_SKEW",
+      "erp_record_ids": [
+        "ce072a52-73ed-b223-4b4e-f503f8722413"
+      ],
+      "rzp_record_ids": [
+        "9a3f0ad1-69a9-aff9-235f-c3d52224a806"
+      ],
+      "bank_record_ids": [
+        "8325bd9e-bf98-e734-e2ed-8686b33422cb"
+      ],
+      "expected_outcome": "MATCH_DELAYED",
+      "metadata": {
+        "delay_days": 10
+      }
+    },
+    {
+      "group_id": "37a3c30a-a1f0-fa7a-8db7-8572ef7db821",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "4a636af5-b6e1-e7ac-9fc9-726435afbb2d"
+      ],
+      "rzp_record_ids": [
+        "ac20af11-ebd3-3927-5865-28e6afc5c20e"
+      ],
+      "bank_record_ids": [
+        "a66c0fa1-b5dc-8a9a-fb38-cd9121f6c63d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "8ff19886-5a2c-41bc-c2c2-26ff1d8b32d9",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "aacad101-f153-0f68-9215-583a9532caba"
+      ],
+      "rzp_record_ids": [
+        "bf74531c-ac9b-389a-6adf-d568b5caa993"
+      ],
+      "bank_record_ids": [
+        "4932936e-88ad-dab1-d765-4a18e4d466eb"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "0e7da698-ab95-c72f-0d95-aaf5253421bc",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "29330fc4-c918-a346-c00c-200c4458b006"
+      ],
+      "rzp_record_ids": [
+        "4024c424-aef2-ab2f-495f-a2fcfbc8c77e"
+      ],
+      "bank_record_ids": [
+        "b0cad2eb-0fe1-621a-d6e1-ba00257c54bc"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "de3790fb-9db9-4eee-1a3c-213173dd3bc6",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "396c357b-dd66-4071-8fd7-b1a1bd4f6118"
+      ],
+      "rzp_record_ids": [
+        "638e1388-8faf-6d4a-a5a9-9ebcbe0ec2da"
+      ],
+      "bank_record_ids": [
+        "cbfd4a31-c8c8-5ad6-82cb-cdc73cd30e99"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "f9cf8499-c9c1-ad45-f4ea-6b976aa415b5",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "0dc5fb06-8d58-09b7-f740-d87c500a174e"
+      ],
+      "rzp_record_ids": [
+        "33fd862d-4057-e470-be61-27a80351b09d"
+      ],
+      "bank_record_ids": [
+        "dc461b34-c7ea-b19b-de6c-f36b9edd2182"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "96a06bf2-c14e-bd10-5e24-4824a5cb3c6e",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "c6b18d94-324b-cc3d-9a77-91a2bd0b0fa2"
+      ],
+      "rzp_record_ids": [
+        "4b4f3b2e-3189-10ec-f6db-b2b6b993ff63"
+      ],
+      "bank_record_ids": [
+        "aec2bb19-fbc3-98d8-2d6b-c88272e588e9"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "8e7d3f5a-4773-e66a-6db2-b0200a670143",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "d89462e8-9580-1c3a-2932-a211214c0a4d"
+      ],
+      "rzp_record_ids": [
+        "77617d80-549f-c34c-0171-f5a74148bd11"
+      ],
+      "bank_record_ids": [
+        "0a398bf7-27a1-58a0-efff-a2f4b5ae329d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "4d187b75-a971-a31f-d7d8-05949d9887bc",
+      "scenario": "TRUNCATED_REFERENCE",
+      "erp_record_ids": [
+        "5bab7f4a-8cd7-4c27-929a-f586ca376c36"
+      ],
+      "rzp_record_ids": [
+        "515f352c-b52a-9e6b-c8b6-48e012a850c5"
+      ],
+      "bank_record_ids": [
+        "2f120b9e-f4fd-25b7-384f-6e3b86804a8a"
+      ],
+      "expected_outcome": "MATCH_PARTIAL_REF",
+      "metadata": {}
+    },
+    {
+      "group_id": "597278c5-1789-be63-6746-5743897b303d",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "54f6516e-a9d0-49dc-369e-5af8e22649ee"
+      ],
+      "rzp_record_ids": [
+        "37ec07a6-4b27-b079-5c5d-3f1b54c0c6c2"
+      ],
+      "bank_record_ids": [
+        "87cec69d-9e47-a339-c0ae-0b1af3476736"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "3d877034-7217-3fa3-5893-ef12ab3f8d22",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "3e6b74fd-9f02-7cbf-eb29-d9129d1b83df"
+      ],
+      "rzp_record_ids": [
+        "e2ba9fce-aebb-af9c-0a35-653cf57a431e"
+      ],
+      "bank_record_ids": [
+        "cbd431cc-ea7a-8c21-61a1-a29c5228ed8d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c53f1db3-d275-bd43-8451-7303e94d4fbe",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "7210045a-823c-7ef9-cd85-65ce83a9c235"
+      ],
+      "rzp_record_ids": [
+        "e5f5c891-4be3-18a8-0b39-dccf7c9f3bc3"
+      ],
+      "bank_record_ids": [
+        "838e9a61-5200-044b-3148-7df8a6ca8d50"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "ab9b153d-35f5-c654-10c2-c2e5a07eafb1",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "af76b6c2-dd6d-6b41-3692-a531c6097cd8"
+      ],
+      "rzp_record_ids": [
+        "34a0dcd4-1a9a-f29e-d5ee-25876c98fd9b"
+      ],
+      "bank_record_ids": [
+        "e0ee5e8a-b3e6-f4c6-d428-df6c89aa4293"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "54eb4c91-b784-ae08-758f-c8fa0614ac41",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "2d90e4ee-0de4-833e-12c0-620c1667c518"
+      ],
+      "rzp_record_ids": [
+        "12087e20-8ede-9b46-407d-0affcb51a911"
+      ],
+      "bank_record_ids": [
+        "e9366a85-3a46-fbe3-d255-a4de9330ba83"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "ac5d4e57-63b6-64f4-0452-f77950ffde64",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "b864a47b-a434-47fb-0182-978288eae7d4"
+      ],
+      "rzp_record_ids": [
+        "bef6a59a-c186-a221-1030-56b79e4c24dd"
+      ],
+      "bank_record_ids": [
+        "d926fe41-b36d-0121-0ba6-fe0995ea6825"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "481186e9-1625-34ca-9b47-e6394d2551eb",
+      "scenario": "FEE_DISCREPANCY",
+      "erp_record_ids": [
+        "a9252745-d276-9c96-6526-247461a451ff"
+      ],
+      "rzp_record_ids": [
+        "889157fd-2804-d0ac-7957-41bb07e3c39a"
+      ],
+      "bank_record_ids": [
+        "641816b7-bf2b-43b4-22e9-e52738491ecc"
+      ],
+      "expected_outcome": "MISMATCH_FEE",
+      "metadata": {
+        "discrepancy": 252
+      }
+    },
+    {
+      "group_id": "0ab1a504-1f8c-56e0-2431-13fd8e190d07",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "8982cbf8-64e2-89c0-98be-5ff0929daf9f"
+      ],
+      "rzp_record_ids": [
+        "4e003d55-15ca-dfaf-f26d-3dd38c2aa0b1"
+      ],
+      "bank_record_ids": [
+        "e74ed0b3-bdce-635f-bf90-5d6a35c606b5"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "38858f7e-2f1a-25a8-2934-4e152477f047",
+      "scenario": "CONSOLIDATED_1_TO_N",
+      "erp_record_ids": [
+        "d9f48bbd-0dec-644c-da2d-2156913a1734",
+        "402d105b-113e-af84-abf3-90964a68369c",
+        "48febf6d-199c-8d94-3c0a-584ea7cd13cb",
+        "958c2936-b186-78ce-4e40-bfbaa8cfe589"
+      ],
+      "rzp_record_ids": [
+        "fe8b4ccb-fd75-a5f3-eeaf-ca83c04446bf",
+        "94a1eab0-b9c0-37aa-3289-f58b1923cafc",
+        "31891f48-e66e-2c11-11de-febf9e98961d",
+        "5d4f7107-911d-dc79-90c8-042027035b27"
+      ],
+      "bank_record_ids": [
+        "2b2bf58c-6da5-8dad-f56a-abc050fb35b0"
+      ],
+      "expected_outcome": "MATCH_CONSOLIDATED",
+      "metadata": {}
+    },
+    {
+      "group_id": "b652ae99-38b5-e89a-c921-057c3f05557c",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "5c074653-d711-73e4-46d4-7d416fa5d3b0"
+      ],
+      "rzp_record_ids": [
+        "54e14f3a-bba4-1ae0-adf8-f7672261ddef"
+      ],
+      "bank_record_ids": [
+        "7202fae5-767d-3b27-7ade-4367e0bd202c"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "d77fbeeb-14fc-3a5d-9b4b-f377a542deb9",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "e42c0aea-23d7-263d-d391-d017dbd4a86d"
+      ],
+      "rzp_record_ids": [
+        "bbc99473-4363-589c-3249-5cff89e2df24"
+      ],
+      "bank_record_ids": [
+        "ba388c8f-1393-09d1-a06a-187de2e6e7a6"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c4ea4ece-67b6-e467-9432-d79794f6c67a",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "8d3543be-0962-4ec9-e803-82eb36777be4"
+      ],
+      "rzp_record_ids": [
+        "ffaca645-e4dc-4306-8b20-ce3e42b7c048"
+      ],
+      "bank_record_ids": [
+        "c6735380-a766-8617-78db-cde38a284792"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "22460ac9-4a7e-ebc2-db6f-1c33bbb4c0ce",
+      "scenario": "FEE_DISCREPANCY",
+      "erp_record_ids": [
+        "6593b659-172e-8c68-82aa-5c4680499bbf"
+      ],
+      "rzp_record_ids": [
+        "a9a54c24-02b6-22e9-808e-08d25d264b1b"
+      ],
+      "bank_record_ids": [
+        "ce7968b7-f6c8-b8b9-d915-56643d274ad5"
+      ],
+      "expected_outcome": "MISMATCH_FEE",
+      "metadata": {
+        "discrepancy": 363
+      }
+    },
+    {
+      "group_id": "a8cf4f62-90d9-170c-f2de-c75c90fcc9f1",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "f06dca24-7bc6-e121-bb64-a525bc653d94"
+      ],
+      "rzp_record_ids": [
+        "c2efda8b-3804-8786-0a58-f43c5bda0655"
+      ],
+      "bank_record_ids": [
+        "43ace875-1017-ab44-3b53-f64b7cd61da4"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "783c91eb-635a-11f2-5c7a-f83dca9d2704",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "fb07ee93-0a37-31ab-0be3-534ae1ad640c"
+      ],
+      "rzp_record_ids": [
+        "b4280f0d-1a6c-f459-52f6-531fa605b7c9"
+      ],
+      "bank_record_ids": [
+        "d463c183-a231-7211-8578-b1c6f7ebc69a"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "60e696ff-a757-43f9-606c-c2f52c816bf0",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "d5e14d1f-e5f2-2dfb-a741-104b96721e98"
+      ],
+      "rzp_record_ids": [
+        "6057153a-4067-f790-8444-050413ed280a"
+      ],
+      "bank_record_ids": [
+        "8430f0fa-390f-ecf5-e841-0a39f9012b9c"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "01b062c1-9aad-9234-e31d-b3457b6b911e",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "2a6524af-709d-338b-2393-6d45e1ccff0d"
+      ],
+      "rzp_record_ids": [
+        "a4bae8bf-83b8-fa05-13bc-0dc63ae0acdb"
+      ],
+      "bank_record_ids": [
+        "2fd90ce1-2676-27ca-3625-fc2047e321c2"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "54899c37-cfa9-026b-6a24-1f463af7fa21",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "7aa1219a-7a93-98bb-acdb-d5f27b44acd0"
+      ],
+      "rzp_record_ids": [
+        "a5b2c7ea-2947-6f54-973e-129c35f0b1be"
+      ],
+      "bank_record_ids": [
+        "3e612d66-05bf-0618-6930-b0c4d5576899"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "92803da2-e40b-50e4-0a08-6989833c8f55",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ec257a75-421d-4dca-2a95-59080e503fd8"
+      ],
+      "rzp_record_ids": [
+        "67cbfc39-f54f-1b92-8442-906f2e16f0b6"
+      ],
+      "bank_record_ids": [
+        "a33b3dfd-9048-65c6-f820-5aa7996f7e88"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "9b4547e0-72fe-fdc2-3772-aa9715f39d39",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "38283a05-2baa-43c9-7b4e-9ecdde0787b1"
+      ],
+      "rzp_record_ids": [
+        "2488c84d-99d0-90fd-6928-043ed492b51a"
+      ],
+      "bank_record_ids": [
+        "c47a3b7e-d209-383b-9528-4c0acb6bf562"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "74169e82-ec1f-41ce-57b9-4dfbaf82e70c",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "60d2759a-3ad5-1382-119f-b03e97314c91"
+      ],
+      "rzp_record_ids": [
+        "043d72db-1bcb-404c-21d8-b96a62ada157"
+      ],
+      "bank_record_ids": [
+        "e8ca7483-dc0e-3375-85d0-691c33cd1d56"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "9d6022c5-e6cf-cbd8-79d2-90012d6b8a4e",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "880bcb0e-c8ab-96ac-e0b4-659a09fe4cdd"
+      ],
+      "rzp_record_ids": [
+        "17db4c2f-1e15-8e2f-c09c-2ebe80da2ed7"
+      ],
+      "bank_record_ids": [
+        "e6e8790b-215d-3b1f-a8cd-f44d7b742440"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "85a4b0cb-6e76-936a-a634-0d1aadb610f4",
+      "scenario": "TRUNCATED_REFERENCE",
+      "erp_record_ids": [
+        "b298b811-0b1e-c578-dff4-7c515ed10e7f"
+      ],
+      "rzp_record_ids": [
+        "f03c664b-3abf-9c65-6dd0-13f387a20e22"
+      ],
+      "bank_record_ids": [
+        "c4c7aab4-ca20-508d-7b6c-7129cd638ba8"
+      ],
+      "expected_outcome": "MATCH_PARTIAL_REF",
+      "metadata": {}
+    },
+    {
+      "group_id": "1903f9b3-937c-a77c-b25b-6de7d6521e08",
+      "scenario": "TIMING_SKEW",
+      "erp_record_ids": [
+        "c40f5405-7a25-ed81-4128-17eb224629cd"
+      ],
+      "rzp_record_ids": [
+        "157511ad-dbea-e9f8-e8fb-5a963b85f6e1"
+      ],
+      "bank_record_ids": [
+        "8b31f4d8-e073-c1d0-9929-afeb48842a14"
+      ],
+      "expected_outcome": "MATCH_DELAYED",
+      "metadata": {
+        "delay_days": 5
+      }
+    },
+    {
+      "group_id": "6001f54d-01d7-7831-850f-1cdc1e2a03f1",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "50deef43-cde5-c35a-b011-7b0a349651d6"
+      ],
+      "rzp_record_ids": [
+        "279f91ab-1b49-09b6-5cbd-b68268aa1236"
+      ],
+      "bank_record_ids": [
+        "40ee131d-95da-d216-a6cd-ae3c6d130705"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "65bf8e04-ae3c-2ce6-fde6-849b468b22af",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "8ebc6d7e-c8a6-5b85-8d56-bff669c9520f"
+      ],
+      "rzp_record_ids": [
+        "8f20c5e7-5ec6-46eb-2dc0-91587b8301cf"
+      ],
+      "bank_record_ids": [
+        "fd0ee0b6-40f7-924b-7bd7-b4bf8e0eabb7"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "a8c6c2df-dd23-ff41-dae1-35862358755c",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "c879d932-7254-0ab7-3ad2-4ac8bf70c042"
+      ],
+      "rzp_record_ids": [
+        "19abdc15-296b-67bf-f301-bb6cb3061300"
+      ],
+      "bank_record_ids": [
+        "c93c9cc6-668b-28da-8222-cd7f36e6ba85"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "f6ee137d-639c-4c6c-2926-205d0d53551a",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "d2c0dec2-1751-94d7-cdeb-2696015aba1d"
+      ],
+      "rzp_record_ids": [
+        "99a9af6a-ed05-4732-78bf-46fa25343e85"
+      ],
+      "bank_record_ids": [
+        "4359ff43-1067-93b6-1690-636b6f74e55d"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "9d2cd944-6690-a951-fc04-ca7aee415f16",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "f6a9e3e3-b62b-ccb1-4956-0c3685609e8a"
+      ],
+      "rzp_record_ids": [
+        "c60b340c-f21a-6f38-0eb5-e5a798f3f640"
+      ],
+      "bank_record_ids": [
+        "7e8eed12-a3ea-21a2-2cde-9187d1fa82a6"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "089a9f4f-31da-e817-4937-b90f84a5b18b",
+      "scenario": "TRUNCATED_REFERENCE",
+      "erp_record_ids": [
+        "3b4ec9f5-b2cd-9a0a-840c-5cb082b34384"
+      ],
+      "rzp_record_ids": [
+        "093b4d72-ac8c-dcaf-2b63-3b189d7d1756"
+      ],
+      "bank_record_ids": [
+        "0012d399-a7af-5545-3d3f-ec1b5c17ebb5"
+      ],
+      "expected_outcome": "MATCH_PARTIAL_REF",
+      "metadata": {}
+    },
+    {
+      "group_id": "33478a91-9609-598e-67cb-a27a65281970",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "1190e515-b420-9103-bca7-26eb03ef0f77"
+      ],
+      "rzp_record_ids": [
+        "48d495a4-8cb2-1aa2-1715-1c03eb4f3638"
+      ],
+      "bank_record_ids": [
+        "ea3e072a-8f22-1604-d46b-7756b9e439ef"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "ee01b9e0-746b-161a-31cc-6738f68ae9b7",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "2ccf1472-42d7-f112-0130-d66b932d1648"
+      ],
+      "rzp_record_ids": [
+        "8f026c2c-1b41-4999-8198-d1f56839f98f"
+      ],
+      "bank_record_ids": [
+        "5708013e-4b54-1670-80cf-b1db1287e313"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "b1b68ecd-4009-45ce-932c-3ec9cb1b8eff",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "7bcf2b31-902b-d154-6088-5550f74f6900"
+      ],
+      "rzp_record_ids": [
+        "56f401e5-c1e9-c4fa-3e47-27fdc51c91f4"
+      ],
+      "bank_record_ids": [
+        "ae7cfd14-7577-1730-c68d-a4b2f613bda0"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "fe83c32a-c9e5-5c47-a237-a8c161f6dfbe",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "ccd7608f-3adc-b38c-b380-46efad4a2b3c"
+      ],
+      "rzp_record_ids": [
+        "5a64845e-f498-16ad-6994-bf8450d3ba03"
+      ],
+      "bank_record_ids": [
+        "b368d836-027d-3808-8920-7bc484399ed9"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "8df71647-1376-9ff9-578c-d875d231f372",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "37f3f32b-5a81-762a-5059-f77b79ff89d9"
+      ],
+      "rzp_record_ids": [
+        "2ecaf629-44e2-2691-92de-d495e4f1e8e8"
+      ],
+      "bank_record_ids": [
+        "ee25356a-aee0-1ec9-bf04-18a9f2765513"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "3aad5840-34ef-71df-43f1-9b58df6c0d60",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "9e5c5dcd-d61a-080a-3fec-0a37d5bea8dc"
+      ],
+      "rzp_record_ids": [
+        "1b4ffd5f-c768-8339-27ef-53575b249c2a"
+      ],
+      "bank_record_ids": [
+        "ad0205f5-1417-c2f9-eb91-731a1eb05b4a"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "7b777e71-d917-38f8-0ad1-c18cf53f091e",
+      "scenario": "CONSOLIDATED_1_TO_N",
+      "erp_record_ids": [
+        "fc014a22-2ed0-b0b2-7da5-6b6e4654e77d",
+        "7a732f35-6c55-40f0-cc9c-f41c86969901",
+        "b2c027e8-1ed0-72e9-f9fc-6034750acc98",
+        "5c91f845-534f-c96d-19ca-9c1b94bcf47a"
+      ],
+      "rzp_record_ids": [
+        "47bf8db7-82d9-a774-ea7f-6c7dc3a6b204",
+        "80a23721-0856-0684-8a6f-c4b3f08d312e",
+        "b0701a53-50ce-857f-75c7-2fb684a91789",
+        "2fe938e4-427b-bffb-dca1-adcc9cdf0664"
+      ],
+      "bank_record_ids": [
+        "78aa16ea-44f7-f01a-3cb5-26d7434a130e"
+      ],
+      "expected_outcome": "MATCH_CONSOLIDATED",
+      "metadata": {}
+    },
+    {
+      "group_id": "7faf6458-2f14-f777-5dad-348e57d52b78",
+      "scenario": "TRUNCATED_REFERENCE",
+      "erp_record_ids": [
+        "c08fe6d7-b361-e70a-6b49-acc635e574e0"
+      ],
+      "rzp_record_ids": [
+        "668d3c8b-dab5-1d55-5d75-c03c5f4faf10"
+      ],
+      "bank_record_ids": [
+        "9247e851-2e0d-3860-7362-f9b74795cd1d"
+      ],
+      "expected_outcome": "MATCH_PARTIAL_REF",
+      "metadata": {}
+    },
+    {
+      "group_id": "8e2ac3ff-3c5d-ba42-cdd8-af09451b6267",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "255603d4-3231-32fa-6181-92dedb370ca7"
+      ],
+      "rzp_record_ids": [
+        "2648c819-bd11-16ee-f58a-b7c7cccf4130"
+      ],
+      "bank_record_ids": [
+        "2d36226c-027e-789c-ce40-483b7915ad7e"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "c90b9454-50d3-802d-b876-a45588b3152d",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "dbc6c928-8fe8-4e20-403f-d5824ccf0a4b"
+      ],
+      "rzp_record_ids": [
+        "19566990-65fd-aadb-0c36-ad4e915d9a63"
+      ],
+      "bank_record_ids": [
+        "3728ddc2-0f5e-8b47-29d0-c613b0c77002"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    },
+    {
+      "group_id": "5c3d0d5f-5c68-01d6-4280-3aa055ac0d06",
+      "scenario": "CLEAN_1_TO_1",
+      "erp_record_ids": [
+        "41f9994a-cf5d-337f-ee8d-5daa8eb7c306"
+      ],
+      "rzp_record_ids": [
+        "1f096b9d-6969-29b2-0513-eda8581993cc"
+      ],
+      "bank_record_ids": [
+        "f68ece81-adf9-568b-de0b-de1859e110eb"
+      ],
+      "expected_outcome": "MATCH",
+      "metadata": {}
+    }
+  ]
+}
