@@ -149,10 +149,33 @@ def test_regenerating_same_seed_same_result():
     engine2 = SyntheticDataEngine(config)
     datasets2 = engine2.generate_all()
 
-    ds1 = datasets1["DEV"][0]
-    ds2 = datasets2["DEV"][0]
+    ds1, gt1 = datasets1["DEV"]
+    ds2, gt2 = datasets2["DEV"]
 
-    # Metadata like generation_id will differ, but records should be exactly the same
+    # Metadata and records must be EXACTLY the same for the same seed
+    assert ds1.metadata == ds2.metadata
+    assert ds1.metadata.generation_id == ds2.metadata.generation_id
+    assert ds1.metadata.scenario_counts == ds2.metadata.scenario_counts
+
     assert ds1.erp_records == ds2.erp_records
     assert ds1.rzp_records == ds2.rzp_records
     assert ds1.bank_records == ds2.bank_records
+
+    assert gt1.metadata == gt2.metadata
+    assert gt1.groups == gt2.groups
+
+def test_different_seed_different_result():
+    config1 = Config(seed=1, dataset_sizes={"DEV": 50})
+    engine1 = SyntheticDataEngine(config1)
+    datasets1 = engine1.generate_all()
+
+    config2 = Config(seed=2, dataset_sizes={"DEV": 50})
+    engine2 = SyntheticDataEngine(config2)
+    datasets2 = engine2.generate_all()
+
+    ds1, gt1 = datasets1["DEV"]
+    ds2, gt2 = datasets2["DEV"]
+
+    assert ds1.metadata.generation_id != ds2.metadata.generation_id
+    # At least some records should differ (first record ID shouldn't match)
+    assert ds1.erp_records[0].id != ds2.erp_records[0].id

@@ -31,9 +31,17 @@ class SyntheticDataEngine:
         self.config = config
         self.rng = random.Random(config.seed)
         self.scenario_generator = ScenarioGenerator(self.rng, tzinfo=timezone.utc)
-        self.generation_id = str(uuid.uuid4())
+
+        # Deterministic generation_id based on seed and config properties
+        namespace = uuid.NAMESPACE_OID
+        config_str = f"1.0.0-{config.seed}-{json.dumps(config.scenario_distribution, sort_keys=True)}"
+        self.generation_id = str(uuid.uuid5(namespace, config_str))
 
     def _generate_dataset(self, name: str, size: int) -> tuple[FinctrlDataset, GroundTruthDataset]:
+        # Refined generation_id strictly per dataset to ensure uniqueness across splits but determinism within
+        namespace = uuid.NAMESPACE_OID
+        dataset_config_str = f"1.0.0-{name}-{size}-{self.config.seed}-{json.dumps(self.config.scenario_distribution, sort_keys=True)}"
+        dataset_generation_id = str(uuid.uuid5(namespace, dataset_config_str))
         erp_records = []
         rzp_records = []
         bank_records = []
@@ -59,7 +67,7 @@ class SyntheticDataEngine:
             dataset_name=name,
             generator_version="1.0.0",
             random_seed=self.config.seed,
-            generation_id=self.generation_id,
+            generation_id=dataset_generation_id,
             record_counts={
                 "erp": len(erp_records),
                 "rzp": len(rzp_records),
