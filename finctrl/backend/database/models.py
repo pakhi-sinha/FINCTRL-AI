@@ -4,7 +4,7 @@ from typing import Optional, List, Any
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON, func, BigInteger
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column, relationship
 from sqlalchemy import UUID
-from sqlalchemy.types import JSON
+from sqlalchemy.dialects.postgresql import JSONB
 
 Base = declarative_base()
 
@@ -78,4 +78,4 @@ class AuditLog(Base, TimestampMixin):
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     action: Mapped[str] = mapped_column(String)
     actor: Mapped[str] = mapped_column(String)
-    changes: Mapped[dict] = mapped_column(JSON)
+    changes: Mapped[dict] = mapped_column(JSONB)
