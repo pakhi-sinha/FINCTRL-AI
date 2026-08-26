@@ -4,8 +4,8 @@ import json
 import os
 from typing import Dict, List
 from datetime import datetime, timezone
-from schemas.models import FinctrlDataset, GroundTruthDataset, DatasetMetadata, ERPRecord, RazorpayRecord, BankRecord, GroundTruthGroup
-from synthetic_data.scenarios import ScenarioGenerator
+from finctrl.backend.schemas.models import FinctrlDataset, GroundTruthDataset, DatasetMetadata, ERPRecord, RazorpayRecord, BankRecord, GroundTruthGroup
+from finctrl.backend.synthetic_data.scenarios import ScenarioGenerator
 from collections import defaultdict
 
 class Config:

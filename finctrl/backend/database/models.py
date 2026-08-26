@@ -1,3 +1,9 @@
+
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import JSONB
+
+JSONType = JSON().with_variant(JSONB, "postgresql")
+
 from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Any
@@ -13,7 +19,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 is_sqlite = DATABASE_URL.startswith("sqlite")
 
 if is_sqlite:
-    from sqlalchemy import JSON as JSONType
     # Custom type decorator to handle UUID to str conversion for SQLite
     import sqlalchemy.types as types
     class UUIDType(types.TypeDecorator):
@@ -36,7 +41,6 @@ if is_sqlite:
     def _uuid_col(*args, **kwargs):
         return Column(UUIDType(), *args, **kwargs)
 else:
-    from sqlalchemy.dialects.postgresql import JSONB as JSONType
     from sqlalchemy.dialects.postgresql import UUID as UUIDType
 
     def get_uuid():

@@ -1,3 +1,6 @@
+import os
+os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///:memory:'
+
 import pytest
 import asyncio
 from sqlalchemy import text

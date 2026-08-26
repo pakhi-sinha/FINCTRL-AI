@@ -3,7 +3,7 @@ import uuid
 import random
 from decimal import Decimal
 from typing import Dict, Any, Tuple, List, Optional
-from schemas.models import ERPRecord, RazorpayRecord, BankRecord, GroundTruthGroup
+from finctrl.backend.schemas.models import ERPRecord, RazorpayRecord, BankRecord, GroundTruthGroup
 
 class ScenarioGenerator:
     def __init__(self, rng: random.Random, tzinfo=None):
