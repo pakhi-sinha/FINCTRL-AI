@@ -47,7 +47,7 @@ async def test_agent_investigate_and_resolve(db_setup):
         actions = [log.action for log in logs]
         assert "AI_INVESTIGATION_STARTED" in actions
         assert "AI_PROPOSED" in actions
-        pass
+        assert "EXCEPTION_CREATED" in actions
 
 @pytest.mark.asyncio
 async def test_agent_investigate_and_exception(db_setup):

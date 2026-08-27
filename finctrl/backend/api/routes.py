@@ -54,23 +54,22 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
     signature = request.headers.get("x-razorpay-signature")
     event_id = request.headers.get("x-razorpay-event-id")
 
-    if settings.RAZORPAY_KEY_SECRET and signature:
-        if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
-            pass # Skipping hard reject for local tests unless strict
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing signature")
 
     if not event_id:
-        try:
-            payload = json.loads(body_bytes)
-            event_id = payload.get("id")
-        except json.JSONDecodeError:
-            pass
+        raise HTTPException(status_code=400, detail="Missing event ID")
+
+    if settings.RAZORPAY_KEY_SECRET:
+        if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
+            raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         payload = json.loads(body_bytes)
     except json.JSONDecodeError:
-        return {"status": "error"}
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    existing = await db.execute(select(FinancialEventModel).filter_by(provider="razorpay", provider_event_id=event_id or "unknown"))
+    existing = await db.execute(select(FinancialEventModel).filter_by(provider="razorpay", provider_event_id=event_id))
     if existing.scalar_one_or_none():
         return {"status": "already_processed"}
 
@@ -79,7 +78,7 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
 
     event_model = FinancialEventModel(
         provider="razorpay",
-        provider_event_id=event_id or "unknown",
+        provider_event_id=event_id,
         event_type=event_type,
         payload_hash=payload_hash,
         raw_payload=payload

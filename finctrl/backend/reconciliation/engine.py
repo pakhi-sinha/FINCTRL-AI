@@ -105,9 +105,20 @@ async def stage_a_exact_match(db: AsyncSession) -> int:
     return matches_created
 
 
+
 async def stage_b_payment_arithmetic(db: AsyncSession) -> int:
     exceptions_created = 0
     payments = await get_unresolved_rzp_payments(db)
+
+    for pm in payments:
+        if pm.fee is not None and pm.tax is not None and pm.amount is not None:
+            if pm.fee + pm.tax > pm.amount:
+                create_exception(db, "RZP", pm.id, "FEE_TAX_EXCEEDS_GROSS", "HIGH")
+                exceptions_created += 1
+            if pm.amount < 0:
+                create_exception(db, "RZP", pm.id, "NEGATIVE_GROSS_AMOUNT", "HIGH")
+                exceptions_created += 1
+
     return exceptions_created
 
 
@@ -117,6 +128,10 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
 
     settlements = await get_unresolved_rzp_settlements(db)
     bank_records = await get_unresolved_bank(db)
+    payments = await get_unresolved_rzp_payments(db)
+    erp_records = await get_unresolved_erp(db)
+
+    erp_by_ref = {e.reference_id: e for e in erp_records}
 
     for sm in settlements:
         expected_net = sm.amount
@@ -124,15 +139,44 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
         # Look for Bank Match
         for bank in bank_records:
             if bank.amount == expected_net and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
-                match = ReconciliationMatchModel(match_type="CONSOLIDATED") # Use CONSOLIDATED for tests
+
+                # Check for linked payments if we have them (e.g. via an association or if we kept settlement_id on payment)
+                # Note: In Phase 4 we sometimes inject rzp_settlement_id dynamically during tests since it's not on the Base model.
+                # In sqlite tests, it can end up in the JSON _data block if it's dynamic
+                linked_payments = []
+                for pm in payments:
+                    pm_settlement_id = getattr(pm, "rzp_settlement_id", getattr(pm, "_rzp_settlement_id", None))
+                    if not pm_settlement_id and hasattr(pm, "data") and isinstance(pm.data, dict):
+                        pm_settlement_id = pm.data.get("rzp_settlement_id")
+                    if pm_settlement_id == sm.rzp_settlement_id:
+                        linked_payments.append(pm)
+
+                match = ReconciliationMatchModel(match_type="CONSOLIDATED")
                 db.add(match)
                 await db.flush()
 
                 create_match_evidence(db, match, "RZP", sm.id)
                 create_match_evidence(db, match, "BANK", bank.id)
-
                 await _mark_reconciled(db, RazorpaySettlementModel, sm.id, True)
                 await _mark_reconciled(db, BankRecordModel, bank.id)
+
+                # Link underlying payments and ERPs if complete
+                if linked_payments:
+                    # check if sum of payment nets == settlement amount
+                    calculated_net = sum([p.amount - (p.fee or 0) - (p.tax or 0) for p in linked_payments])
+                    if calculated_net == expected_net:
+                        for p in linked_payments:
+                            create_match_evidence(db, match, "RZP", p.id)
+                            await _mark_reconciled(db, RazorpayPaymentModel, p.id, True)
+
+                            # Find ERP
+                            if p.rzp_order_id and p.rzp_order_id in erp_by_ref:
+                                e = erp_by_ref[p.rzp_order_id]
+                                create_match_evidence(db, match, "ERP", e.id)
+                                await _mark_reconciled(db, ERPRecordModel, e.id)
+                    else:
+                        create_exception(db, "RZP", sm.id, "SETTLEMENT_SHORTFALL", "HIGH")
+                        exceptions_created += 1
 
                 matches_created += 1
                 bank_records.remove(bank)
@@ -144,9 +188,25 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
 async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> int:
     matches_created = 0
     refunds = await get_unresolved_rzp_refunds(db)
+    payments = await get_unresolved_rzp_payments(db)
+
+    payment_map = {pm.rzp_payment_id: pm for pm in payments}
+
+    for rm in refunds:
+        # Match refund to payment
+        if rm.rzp_payment_id in payment_map:
+            pm = payment_map[rm.rzp_payment_id]
+            # Simple check if refund matches payment amount or refund status
+            if rm.status == "processed":
+                match = ReconciliationMatchModel(match_type="REFUND_MATCH")
+                db.add(match)
+                await db.flush()
+                create_match_evidence(db, match, "RZP", rm.id)
+                create_match_evidence(db, match, "RZP", pm.id)
+                await _mark_reconciled(db, RazorpayRefundModel, rm.id, True)
+                matches_created += 1
 
     return matches_created
-
 async def generate_candidates(db: AsyncSession) -> int:
     candidates_created = 0
 
