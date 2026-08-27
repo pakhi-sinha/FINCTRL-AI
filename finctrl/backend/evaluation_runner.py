@@ -47,11 +47,30 @@ async def run_evaluation(dataset_path: str) -> Dict[str, Any]:
         matches_q = await db.execute(select(ReconciliationMatchModel).options(selectinload(ReconciliationMatchModel.evidence)))
         all_matches = matches_q.scalars().all()
 
+        from finctrl.backend.database.models import ERPRecordModel, RazorpayPaymentModel, RazorpaySettlementModel, BankRecordModel
         # Build map of what we matched
-        # Our match -> set of record IDs
+        # Our match -> set of stable external/business IDs to compare against ground truth
         our_matches = []
         for match in all_matches:
-            our_matches.append(set([str(ev.record_id) for ev in match.evidence]))
+            s = set()
+            for ev in match.evidence:
+                if ev.record_type == "ERP":
+                    rec = await db.execute(select(ERPRecordModel).filter_by(id=ev.record_id))
+                    p = rec.scalar_one_or_none()
+                    if p: s.add(str(p.id)) # ground_truth uses the ID for ERP records
+                elif ev.record_type == "RZP":
+                    rec = await db.execute(select(RazorpayPaymentModel).filter_by(id=ev.record_id))
+                    p = rec.scalar_one_or_none()
+                    if p: s.add(str(p.source_event_id)) # ground_truth uses the ID (which maps to source_event_id for RZP records)
+                    else:
+                        rec = await db.execute(select(RazorpaySettlementModel).filter_by(id=ev.record_id))
+                        p = rec.scalar_one_or_none()
+                        if p: s.add(str(p.source_event_id))
+                elif ev.record_type == "BANK":
+                    rec = await db.execute(select(BankRecordModel).filter_by(id=ev.record_id))
+                    p = rec.scalar_one_or_none()
+                    if p: s.add(str(p.id)) # ground truth uses the ID for BANK records
+            our_matches.append(s)
 
         for group in ground_truth.get("groups", []):
             if group.get("expected_outcome") == "MATCH":

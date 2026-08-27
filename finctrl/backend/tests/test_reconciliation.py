@@ -70,3 +70,19 @@ async def test_consolidated_settlement():
         await db.refresh(erp2)
         assert erp1.status == "RECONCILED"
         assert erp2.status == "RECONCILED"
+
+@pytest.mark.asyncio
+async def test_stage_a_requires_bank_evidence():
+    async for db in get_db_session():
+        # Valid ERP and RZP, but NO bank
+        erp = ERPRecordModel(reference_id="ORD-NO-BANK", amount=10000, timestamp=datetime.utcnow(), type="SALE", status="PENDING")
+        rzp = RazorpayPaymentModel(rzp_payment_id="pay_abc124", rzp_order_id="ORD-NO-BANK", amount=10000, fee=200, tax=36, currency="INR", status="CAPTURED", created_at_ts=0)
+        db.add_all([erp, rzp])
+        await db.commit()
+        response = await run_reconciliation(db)
+
+        # Should not create EXACT_1_1 match since bank is missing
+        assert response.matches_created == 0
+
+        await db.refresh(erp)
+        assert erp.status != "RECONCILED"
