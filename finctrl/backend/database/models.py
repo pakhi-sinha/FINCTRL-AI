@@ -4,12 +4,18 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
+
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import JSONB
+
+JSONType = JSON().with_variant(JSONB, "postgresql")
+
 from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Any
 import os
 
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -49,10 +55,29 @@ else:
     def _uuid_col(*args, **kwargs):
         return Column(UUIDType(as_uuid=True), *args, **kwargs)
 
+
+class FinancialEventModel(Base):
+    __tablename__ = "financial_events"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    provider = Column(String, nullable=False, index=True)
+    provider_event_id = Column(String, nullable=False, index=True)
+    event_type = Column(String, nullable=False)
+    payload_hash = Column(String, nullable=False)
+    raw_payload = Column(JSONType, nullable=False)
+    received_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    processing_status = Column(String, nullable=False, default="PENDING")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    schema_version = Column(String, nullable=False, default="1.0")
+    __table_args__ = (UniqueConstraint('provider', 'provider_event_id', name='uix_provider_event_id'),)
+
 class ERPRecordModel(Base):
     __tablename__ = "erp_records"
 
     id = _uuid_col(primary_key=True, default=get_uuid)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
     reference_id = Column(String, index=True, nullable=False)
     amount = Column(Integer, nullable=False)  # subunits
     currency = Column(String, default="INR", nullable=False)
@@ -62,27 +87,86 @@ class ERPRecordModel(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class RazorpayRecordModel(Base):
-    __tablename__ = "razorpay_records"
+
+class RazorpayOrderModel(Base):
+    __tablename__ = "razorpay_orders"
 
     id = _uuid_col(primary_key=True, default=get_uuid)
-    rzp_payment_id = Column(String, index=True, nullable=False)
-    rzp_settlement_id = Column(String, index=True, nullable=True)
-    order_receipt = Column(String, nullable=False)
-    gross_amount = Column(Integer, nullable=False)
-    fee = Column(Integer, nullable=False)
-    tax = Column(Integer, nullable=False)
-    net_amount = Column(Integer, nullable=False)
-    type = Column(String, nullable=False)
-    timestamp = Column(DateTime(timezone=True), nullable=False)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
+    rzp_order_id = Column(String, index=True, nullable=False)
+    receipt = Column(String, index=True, nullable=False)
+    amount = Column(Integer, nullable=False)
+    amount_paid = Column(Integer, nullable=False, default=0)
+    amount_due = Column(Integer, nullable=False)
+    currency = Column(String, default="INR", nullable=False)
     status = Column(String, nullable=False)
+    created_at_ts = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RazorpayPaymentModel(Base):
+    __tablename__ = "razorpay_payments"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
+    rzp_payment_id = Column(String, index=True, nullable=False)
+    rzp_order_id = Column(String, index=True, nullable=True)
+    amount = Column(Integer, nullable=False)
+    currency = Column(String, default="INR", nullable=False)
+    status = Column(String, nullable=False)
+    method = Column(String, nullable=True)
+    amount_refunded = Column(Integer, nullable=False, default=0)
+    refund_status = Column(String, nullable=True)
+    captured = Column(Integer, nullable=False, default=0)
+    email = Column(String, nullable=True)
+    contact = Column(String, nullable=True)
+    fee = Column(Integer, nullable=True)
+    tax = Column(Integer, nullable=True)
+    error_code = Column(String, nullable=True)
+    error_description = Column(String, nullable=True)
+    created_at_ts = Column(Integer, nullable=False)
+    reconciliation_status = Column(String, nullable=False, default="UNRECONCILED")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RazorpaySettlementModel(Base):
+    __tablename__ = "razorpay_settlements"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
+    rzp_settlement_id = Column(String, index=True, nullable=False)
+    amount = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    fees = Column(Integer, nullable=False)
+    tax = Column(Integer, nullable=False)
+    utr = Column(String, index=True, nullable=True)
+    created_at_ts = Column(Integer, nullable=False)
+    reconciliation_status = Column(String, nullable=False, default="UNRECONCILED")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RazorpayRefundModel(Base):
+    __tablename__ = "razorpay_refunds"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
+    rzp_refund_id = Column(String, index=True, nullable=False)
+    rzp_payment_id = Column(String, index=True, nullable=False)
+    amount = Column(Integer, nullable=False)
+    currency = Column(String, default="INR", nullable=False)
+    status = Column(String, nullable=False)
+    receipt = Column(String, nullable=True)
+    created_at_ts = Column(Integer, nullable=False)
+    reconciliation_status = Column(String, nullable=False, default="UNRECONCILED")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class BankRecordModel(Base):
     __tablename__ = "bank_records"
 
     id = _uuid_col(primary_key=True, default=get_uuid)
+    source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
     transaction_ref = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=False)
     amount = Column(Integer, nullable=False)

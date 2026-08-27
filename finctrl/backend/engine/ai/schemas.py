@@ -2,10 +2,17 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
 class ProposedMatchSchema(BaseModel):
-    decision: Literal["PROPOSE_MATCH", "PROPOSE_EXCEPTION", "NO_MATCH"]
-    match_type: Literal["ONE_TO_ONE", "ONE_TO_MANY", "FEE_DISCREPANCY", "PARTIAL", "NO_MATCH"]
-    evidence_ids: List[str]
+    classification: Literal["MATCH", "EXCEPTION", "UNRESOLVED"]
     confidence: float = Field(ge=0.0, le=1.0)
-    reasoning: str
-    discrepancy: Optional[int] = None
-    unresolved_reason: Optional[str] = None
+    reason: str
+    supporting_evidence: List[str] = Field(description="List of IDs for evidence used")
+    missing_evidence: Optional[str] = None
+    recommended_action: Literal["AUTO_RESOLVE", "HUMAN_REVIEW_REQUIRED", "EXCEPTION"]
+    risk_level: Literal["LOW", "MEDIUM", "HIGH"]
+    requires_human_approval: bool = False
+
+    # Keeping old fields as optional for backwards compatibility during testing
+    decision: Optional[str] = None
+    match_type: Optional[str] = None
+    evidence_ids: Optional[List[str]] = Field(default_factory=list)
+    reasoning: Optional[str] = None
