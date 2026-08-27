@@ -1,3 +1,6 @@
+import os
+os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///:memory:'
+
 import pytest
 from finctrl.backend.engine.ai.tools import execute_tool, calculate_fee_discrepancy
 from finctrl.backend.integrations.razorpay.client import razorpay_client

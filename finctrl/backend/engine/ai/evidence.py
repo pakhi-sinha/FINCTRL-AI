@@ -6,7 +6,7 @@ from sqlalchemy import select
 from finctrl.backend.database.models import (
     ReconciliationCandidateModel,
     ERPRecordModel,
-    RazorpayRecordModel,
+    RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel, RazorpayOrderModel,
     BankRecordModel
 )
 
@@ -76,7 +76,25 @@ async def collect_evidence(db: AsyncSession, candidate_id: str) -> Optional[Evid
             package.erp_records.append(_serialize_model(r))
 
     for rid in rzp_ids:
-        res = await db.execute(select(RazorpayRecordModel).filter_by(id=UUID(rid)))
+        res = await db.execute(select(RazorpayPaymentModel).filter_by(id=UUID(rid)))
+        r = res.scalar_one_or_none()
+        if r:
+            package.rzp_records.append(_serialize_model(r))
+            continue
+
+        res = await db.execute(select(RazorpaySettlementModel).filter_by(id=UUID(rid)))
+        r = res.scalar_one_or_none()
+        if r:
+            package.rzp_records.append(_serialize_model(r))
+            continue
+
+        res = await db.execute(select(RazorpayRefundModel).filter_by(id=UUID(rid)))
+        r = res.scalar_one_or_none()
+        if r:
+            package.rzp_records.append(_serialize_model(r))
+            continue
+
+        res = await db.execute(select(RazorpayOrderModel).filter_by(id=UUID(rid)))
         r = res.scalar_one_or_none()
         if r:
             package.rzp_records.append(_serialize_model(r))

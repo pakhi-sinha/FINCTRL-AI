@@ -4,7 +4,7 @@ from sqlalchemy import select, and_
 from datetime import datetime
 import asyncio
 
-from finctrl.backend.database.models import ERPRecordModel, RazorpayRecordModel, BankRecordModel
+from finctrl.backend.database.models import ERPRecordModel, RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel, RazorpayOrderModel, BankRecordModel
 from finctrl.backend.integrations.razorpay.client import razorpay_client
 
 async def search_records(db: AsyncSession, record_type: str, status: str = "PENDING_INVESTIGATION", limit: int = 10) -> List[Dict[str, Any]]:
@@ -13,7 +13,7 @@ async def search_records(db: AsyncSession, record_type: str, status: str = "PEND
     if record_type == "ERP":
         model = ERPRecordModel
     elif record_type == "RZP":
-        model = RazorpayRecordModel
+        model = RazorpayPaymentModel
     elif record_type == "BANK":
         model = BankRecordModel
 
@@ -68,7 +68,7 @@ async def fetch_unreconciled_in_window(db: AsyncSession, record_type: str, start
     if record_type == "ERP":
         model = ERPRecordModel
     elif record_type == "RZP":
-        model = RazorpayRecordModel
+        model = RazorpayPaymentModel
     elif record_type == "BANK":
         model = BankRecordModel
 

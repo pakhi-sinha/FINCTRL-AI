@@ -1,3 +1,6 @@
+import os
+os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///:memory:'
+
 import pytest
 from finctrl.backend.engine.ai.provider import OpenRouterProvider, OpenAIProvider, MockAIProvider, get_ai_provider
 from finctrl.backend.config import settings

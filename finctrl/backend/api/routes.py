@@ -2,13 +2,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
+from datetime import datetime
 
 from finctrl.backend.database.database import get_db_session
+
+
 from finctrl.backend.database.models import (
+    FinancialEventModel,
     ERPRecordModel,
-    RazorpayRecordModel,
+    RazorpayOrderModel,
+    RazorpayPaymentModel,
+    RazorpaySettlementModel,
+    RazorpayRefundModel,
     BankRecordModel,
     ReconciliationMatchModel,
+    MatchEvidenceModel,
     ReconciliationCandidateModel,
     ExceptionModel
 )
@@ -18,13 +26,134 @@ from finctrl.backend.api.schemas import (
     ERPBatchPayload,
     RZPBatchPayload,
     BankBatchPayload,
+    WebhookEventPayload,
     MatchResponse,
     CandidateResponse,
     RunReconciliationResponse
 )
+import hashlib
+import json
+import hmac
+from fastapi import Request
+from finctrl.backend.config import settings
+
 from finctrl.backend.reconciliation.engine import run_reconciliation
 
 router = APIRouter()
+
+
+def verify_signature(payload_body: bytes, signature: str, secret: str) -> bool:
+    expected_signature = hmac.new(
+        key=secret.encode('utf-8'),
+        msg=payload_body,
+        digestmod=hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, signature)
+
+@router.post("/webhooks/razorpay")
+async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_session)):
+    body_bytes = await request.body()
+    signature = request.headers.get("x-razorpay-signature")
+    event_id = request.headers.get("x-razorpay-event-id")
+
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing signature")
+
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Missing event ID")
+
+    if not settings.RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body_bytes)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    existing = await db.execute(select(FinancialEventModel).filter_by(provider="razorpay", provider_event_id=event_id))
+    if existing.scalar_one_or_none():
+        return {"status": "already_processed"}
+
+    payload_hash = hashlib.sha256(body_bytes).hexdigest()
+    event_type = payload.get("event", "unknown")
+
+    event_model = FinancialEventModel(
+        provider="razorpay",
+        provider_event_id=event_id,
+        event_type=event_type,
+        payload_hash=payload_hash,
+        raw_payload=payload
+    )
+    db.add(event_model)
+    await db.flush()
+
+    try:
+        if event_type == "order.paid":
+            order_data = payload.get("payload", {}).get("order", {}).get("entity", {})
+            if order_data:
+                om = RazorpayOrderModel(
+                    source_event_id=event_model.id,
+                    rzp_order_id=order_data.get("id"),
+                    receipt=order_data.get("receipt"),
+                    amount=order_data.get("amount", 0),
+                    amount_due=order_data.get("amount_due", 0),
+                    status=order_data.get("status"),
+                    created_at_ts=order_data.get("created_at", 0)
+                )
+                db.add(om)
+        elif event_type == "payment.captured":
+            payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
+            if payment_data:
+                pm = RazorpayPaymentModel(
+                    source_event_id=event_model.id,
+                    rzp_payment_id=payment_data.get("id"),
+                    rzp_order_id=payment_data.get("order_id"),
+                    amount=payment_data.get("amount", 0),
+                    currency=payment_data.get("currency", "INR"),
+                    status=payment_data.get("status"),
+                    created_at_ts=payment_data.get("created_at", 0)
+                )
+                db.add(pm)
+        elif event_type == "settlement.processed":
+            settlement_data = payload.get("payload", {}).get("settlement", {}).get("entity", {})
+            if settlement_data:
+                sm = RazorpaySettlementModel(
+                    source_event_id=event_model.id,
+                    rzp_settlement_id=settlement_data.get("id"),
+                    amount=settlement_data.get("amount", 0),
+                    status=settlement_data.get("status"),
+                    fees=settlement_data.get("fees", 0),
+                    tax=settlement_data.get("tax", 0),
+                    created_at_ts=settlement_data.get("created_at", 0)
+                )
+                db.add(sm)
+        elif event_type == "refund.processed":
+            refund_data = payload.get("payload", {}).get("refund", {}).get("entity", {})
+            if refund_data:
+                rm = RazorpayRefundModel(
+                    source_event_id=event_model.id,
+                    rzp_refund_id=refund_data.get("id"),
+                    rzp_payment_id=refund_data.get("payment_id"),
+                    amount=refund_data.get("amount", 0),
+                    currency=refund_data.get("currency", "INR"),
+                    status=refund_data.get("status"),
+                    receipt=refund_data.get("receipt"),
+                    created_at_ts=refund_data.get("created_at", 0)
+                )
+                db.add(rm)
+        event_model.processing_status = "PROCESSED"
+        event_model.processed_at = datetime.utcnow()
+        await db.commit()
+        return {"status": "ok", "event_id": str(event_model.id)}
+    except Exception as e:
+        event_model.processing_status = "FAILED"
+        event_model.error_message = str(e)
+        await db.commit()
+        raise HTTPException(status_code=500, detail="Processing failed")
+
 
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():
@@ -36,17 +165,30 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
     inserted = 0
     skipped = 0
 
-    # Simple check for dupes based on ID (since Phase 1 data has UUIDs)
-    # Production would typically do batch inserts and handle constraint violations,
-    # but looping is fine here for explicit control over skipped.
     for record in payload.records:
         existing = await db.execute(select(ERPRecordModel).filter_by(id=record.id))
         if existing.scalar_one_or_none():
             skipped += 1
             continue
 
+        raw_payload = record.model_dump(mode="json")
+        payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
+
+        event_model = FinancialEventModel(
+            provider="erp",
+            provider_event_id=str(record.id),
+            event_type="erp.upload",
+            payload_hash=payload_hash,
+            raw_payload=raw_payload,
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
+        )
+        db.add(event_model)
+        await db.flush()
+
         db_record = ERPRecordModel(
             id=record.id,
+            source_event_id=event_model.id,
             reference_id=record.reference_id,
             amount=record.amount,
             currency=record.currency,
@@ -67,25 +209,67 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
     skipped = 0
 
     for record in payload.records:
-        existing = await db.execute(select(RazorpayRecordModel).filter_by(id=record.id))
+        existing = await db.execute(select(RazorpayPaymentModel).filter_by(rzp_payment_id=record.rzp_payment_id))
         if existing.scalar_one_or_none():
             skipped += 1
             continue
 
-        db_record = RazorpayRecordModel(
-            id=record.id,
+        raw_payload = record.model_dump(mode="json")
+        payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
+
+        event_model = FinancialEventModel(
+            provider="razorpay_legacy",
+            provider_event_id=str(record.id),
+            event_type="legacy.upload",
+            payload_hash=payload_hash,
+            raw_payload=raw_payload,
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
+        )
+        db.add(event_model)
+        await db.flush()
+
+        # Create Order
+        om = RazorpayOrderModel(
+            source_event_id=event_model.id,
+            rzp_order_id=f"order_{record.id}",
+            receipt=record.order_receipt,
+            amount=record.gross_amount,
+            amount_due=0,
+            status="paid",
+            created_at_ts=int(record.timestamp.timestamp())
+        )
+        db.add(om)
+
+        # Create Payment
+        pm = RazorpayPaymentModel(
+            source_event_id=event_model.id,
             rzp_payment_id=record.rzp_payment_id,
+            rzp_order_id=f"order_{record.id}",
             rzp_settlement_id=record.rzp_settlement_id,
-            order_receipt=record.order_receipt,
-            gross_amount=record.gross_amount,
+            amount=record.gross_amount,
+            currency="INR",
+            status=record.status,
+            captured=1 if record.status == "captured" else 0,
             fee=record.fee,
             tax=record.tax,
-            net_amount=record.net_amount,
-            type=record.type,
-            timestamp=record.timestamp,
-            status=record.status
+            created_at_ts=int(record.timestamp.timestamp())
         )
-        db.add(db_record)
+        db.add(pm)
+
+        # Create Settlement if ID exists
+        if record.rzp_settlement_id:
+            sm = RazorpaySettlementModel(
+                source_event_id=event_model.id,
+                rzp_settlement_id=record.rzp_settlement_id,
+                amount=record.net_amount,
+                status="processed",
+                fees=record.fee,
+                tax=record.tax,
+                created_at_ts=int(record.timestamp.timestamp())
+            )
+            db.add(sm)
+
         inserted += 1
 
     await db.commit()
@@ -103,8 +287,24 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
             skipped += 1
             continue
 
+        raw_payload = record.model_dump(mode="json")
+        payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
+
+        event_model = FinancialEventModel(
+            provider="bank",
+            provider_event_id=str(record.id),
+            event_type="bank.upload",
+            payload_hash=payload_hash,
+            raw_payload=raw_payload,
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
+        )
+        db.add(event_model)
+        await db.flush()
+
         db_record = BankRecordModel(
             id=record.id,
+            source_event_id=event_model.id,
             transaction_ref=record.transaction_ref,
             description=record.description,
             amount=record.amount,
@@ -185,3 +385,102 @@ async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(g
             } for log in logs
         ]
     }
+
+from finctrl.backend.api.cash_position_schema import CashPositionResponse
+
+@router.get("/cash-position", response_model=CashPositionResponse)
+async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
+    # Realized cash: Sum of all RECONCILED Bank Records matching settlements
+    # Ensure they are linked to a Razorpay Settlement in MatchEvidenceModel
+    realized_cash_result = await db.execute(
+        select(BankRecordModel).join(
+            MatchEvidenceModel,
+            MatchEvidenceModel.record_id == BankRecordModel.id
+        ).join(
+            ReconciliationMatchModel,
+            ReconciliationMatchModel.id == MatchEvidenceModel.match_id
+        ).filter(
+            BankRecordModel.status == "RECONCILED",
+            BankRecordModel.type == "CREDIT",
+            ReconciliationMatchModel.match_type == "CONSOLIDATED"
+        )
+    )
+    realized_cash_records = realized_cash_result.scalars().all()
+    current_realized_cash = sum(r.amount for r in realized_cash_records)
+
+    # Captured but unsettled amounts (Payments captured but not reconciled/settled)
+    unsettled_payments_result = await db.execute(
+        select(RazorpayPaymentModel).filter(
+            RazorpayPaymentModel.status == "CAPTURED",
+            RazorpayPaymentModel.reconciliation_status != "RECONCILED"
+        )
+    )
+    unsettled_payments = unsettled_payments_result.scalars().all()
+
+    captured_unsettled_amount = 0
+    known_fees = 0
+    known_tax = 0
+
+    for pm in unsettled_payments:
+        captured_unsettled_amount += pm.amount
+        known_fees += pm.fee or 0
+        known_tax += pm.tax or 0
+
+    # Expected refunds (Processed refunds that are not yet reconciled with settlements)
+    expected_refunds_result = await db.execute(
+        select(RazorpayRefundModel).filter(
+            RazorpayRefundModel.status == "processed",
+            RazorpayRefundModel.reconciliation_status != "RECONCILED"
+        )
+    )
+    expected_refunds_records = expected_refunds_result.scalars().all()
+    expected_refunds = sum(r.amount for r in expected_refunds_records)
+
+    projected_cash_position = current_realized_cash + captured_unsettled_amount - known_fees - known_tax - expected_refunds
+
+    return CashPositionResponse(
+        current_realized_cash=current_realized_cash,
+        captured_unsettled_amount=captured_unsettled_amount,
+        expected_refunds=expected_refunds,
+        known_fees=known_fees,
+        known_tax=known_tax,
+        projected_cash_position=projected_cash_position,
+        records_analyzed=len(realized_cash_records) + len(unsettled_payments) + len(expected_refunds_records)
+    )
+
+from finctrl.backend.api.metrics_schema import MetricsResponse
+from sqlalchemy import func
+
+@router.get("/metrics", response_model=MetricsResponse)
+async def get_metrics(db: AsyncSession = Depends(get_db_session)):
+
+    processed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "PROCESSED"))
+    records_processed = processed_count.scalar() or 0
+
+    failed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "FAILED"))
+    processing_failures = failed_count.scalar() or 0
+
+    reconciled_count = await db.execute(select(func.count(ReconciliationMatchModel.id)))
+    records_reconciled = reconciled_count.scalar() or 0
+
+    exception_count = await db.execute(select(func.count(ExceptionModel.id)))
+    exceptions_created = exception_count.scalar() or 0
+
+    resolved_exceptions = await db.execute(select(func.count(ExceptionModel.id)).filter(ExceptionModel.status == "RESOLVED"))
+    exceptions_resolved = resolved_exceptions.scalar() or 0
+
+    escalated_exceptions = await db.execute(select(func.count(ExceptionModel.id)).filter(ExceptionModel.status == "ESCALATED"))
+    exceptions_escalated = escalated_exceptions.scalar() or 0
+
+    candidate_count = await db.execute(select(func.count(ReconciliationCandidateModel.id)))
+    candidates_created = candidate_count.scalar() or 0
+
+    return MetricsResponse(
+        records_processed=records_processed,
+        records_reconciled=records_reconciled,
+        exceptions_created=exceptions_created,
+        exceptions_resolved=exceptions_resolved,
+        exceptions_escalated=exceptions_escalated,
+        candidates_created=candidates_created,
+        processing_failures=processing_failures
+    )

@@ -1,3 +1,6 @@
+import os
+os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///:memory:'
+
 import pytest
 import os
 from uuid import uuid4
@@ -25,7 +28,7 @@ async def test_agent_investigate_and_resolve(db_setup):
         # Let's use a simpler match that just gets EXCEPTIOn or HUMAN_REVIEW, or NO_MATCH.
         # Actually NO_MATCH decision becomes EXCEPTION. Let's do that.
         provider.next_message = ChatCompletionMessage(
-            content='{"decision": "NO_MATCH", "match_type": "NO_MATCH", "evidence_ids": [], "confidence": 0.96, "reasoning": "mock valid"}',
+            content='{"classification": "EXCEPTION", "recommended_action": "EXCEPTION", "risk_level": "HIGH", "supporting_evidence": [], "confidence": 0.96, "reason": "mock valid"}',
             role="assistant"
         )
 
@@ -53,7 +56,7 @@ async def test_agent_investigate_and_exception(db_setup):
 
         provider = MockAIProvider()
         provider.next_message = ChatCompletionMessage(
-            content='{"decision": "PROPOSE_MATCH", "match_type": "ONE_TO_ONE", "evidence_ids": [], "confidence": 0.50, "reasoning": "mock low conf"}',
+            content='{"classification": "MATCH", "recommended_action": "AUTO_RESOLVE", "risk_level": "LOW", "supporting_evidence": [], "confidence": 0.50, "reason": "mock low conf"}',
             role="assistant"
         )
 

@@ -22,6 +22,13 @@ class RZPBatchPayload(BaseModel):
 class BankBatchPayload(BaseModel):
     records: List[BankRecord]
 
+
+class WebhookEventPayload(BaseModel):
+    provider: str
+    provider_event_id: str
+    event_type: str
+    raw_payload: dict
+
 class CandidateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

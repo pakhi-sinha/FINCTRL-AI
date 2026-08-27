@@ -13,7 +13,7 @@ from finctrl.backend.database.models import (
     ExceptionModel,
     AuditLogModel,
     ERPRecordModel,
-    RazorpayRecordModel,
+    RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel, RazorpayOrderModel,
     BankRecordModel
 )
 
@@ -43,13 +43,18 @@ async def apply_action(db: AsyncSession, candidate_id: str, decision: PolicyDeci
         if any(r["id"] == eid for r in evidence.erp_records):
             record = (await db.execute(select(ERPRecordModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
         elif any(r["id"] == eid for r in evidence.rzp_records):
-            record = (await db.execute(select(RazorpayRecordModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
-        elif any(r["id"] == eid for r in evidence.bank_records):
-            record = (await db.execute(select(BankRecordModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+            record = (await db.execute(select(RazorpayPaymentModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+            if not record:
+                record = (await db.execute(select(RazorpaySettlementModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+            if not record:
+                record = (await db.execute(select(RazorpayRefundModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+            if not record:
+                record = (await db.execute(select(RazorpayOrderModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
 
-        if not record or record.status == "RECONCILED":
-            _create_audit(db, "CANDIDATE", UUID(candidate_id), "ACTION_FAILED", {"reason": f"Record {eid} already reconciled or missing"})
-            return
+            recon_status = getattr(record, "reconciliation_status", getattr(record, "status", None))
+            if recon_status == "RECONCILED":
+                _create_audit(db, "CANDIDATE", UUID(candidate_id), "ACTION_FAILED", {"reason": f"Record {eid} already reconciled or missing"})
+                return
 
     if decision.action == "AUTO_RESOLVE":
         match = ReconciliationMatchModel(match_type=proposal.match_type, status="RESOLVED")
@@ -70,8 +75,17 @@ async def apply_action(db: AsyncSession, candidate_id: str, decision: PolicyDeci
                     r = (await db.execute(select(ERPRecordModel).filter_by(id=UUID(eid)))).scalar_one()
                     r.status = "RECONCILED"
                 elif record_type == "RZP":
-                    r = (await db.execute(select(RazorpayRecordModel).filter_by(id=UUID(eid)))).scalar_one()
-                    r.status = "RECONCILED"
+                    r = (await db.execute(select(RazorpayPaymentModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+                    if r:
+                        r.reconciliation_status = "RECONCILED"
+                    else:
+                        r2 = (await db.execute(select(RazorpaySettlementModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+                        if r2:
+                            r2.reconciliation_status = "RECONCILED"
+                        else:
+                            r3 = (await db.execute(select(RazorpayRefundModel).filter_by(id=UUID(eid)))).scalar_one_or_none()
+                            if r3:
+                                r3.reconciliation_status = "RECONCILED"
                 elif record_type == "BANK":
                     r = (await db.execute(select(BankRecordModel).filter_by(id=UUID(eid)))).scalar_one()
                     r.status = "RECONCILED"
