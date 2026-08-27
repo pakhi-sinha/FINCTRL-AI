@@ -111,12 +111,19 @@ async def stage_b_payment_arithmetic(db: AsyncSession) -> int:
     payments = await get_unresolved_rzp_payments(db)
 
     for pm in payments:
+        if pm.amount is not None:
+            if pm.amount < 0:
+                create_exception(db, "RZP", pm.id, "NEGATIVE_GROSS_AMOUNT", "HIGH")
+                exceptions_created += 1
+
         if pm.fee is not None and pm.tax is not None and pm.amount is not None:
             if pm.fee + pm.tax > pm.amount:
                 create_exception(db, "RZP", pm.id, "FEE_TAX_EXCEEDS_GROSS", "HIGH")
                 exceptions_created += 1
-            if pm.amount < 0:
-                create_exception(db, "RZP", pm.id, "NEGATIVE_GROSS_AMOUNT", "HIGH")
+
+            expected_net = pm.amount - pm.fee - pm.tax
+            if expected_net < 0:
+                create_exception(db, "RZP", pm.id, "NEGATIVE_EXPECTED_NET", "HIGH")
                 exceptions_created += 1
 
     return exceptions_created
@@ -185,28 +192,69 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
     return matches_created, exceptions_created
 
 
-async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> int:
+async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, int]:
     matches_created = 0
+    exceptions_created = 0
+
     refunds = await get_unresolved_rzp_refunds(db)
-    payments = await get_unresolved_rzp_payments(db)
+    # We may need to find payments even if they are reconciled (e.g. refund after settlement)
+    result = await db.execute(select(RazorpayPaymentModel))
+    payments = list(result.scalars().all())
 
     payment_map = {pm.rzp_payment_id: pm for pm in payments}
 
+    refunds_by_payment = defaultdict(list)
     for rm in refunds:
-        # Match refund to payment
-        if rm.rzp_payment_id in payment_map:
-            pm = payment_map[rm.rzp_payment_id]
-            # Simple check if refund matches payment amount or refund status
-            if rm.status == "processed":
-                match = ReconciliationMatchModel(match_type="REFUND_MATCH")
-                db.add(match)
-                await db.flush()
-                create_match_evidence(db, match, "RZP", rm.id)
-                create_match_evidence(db, match, "RZP", pm.id)
-                await _mark_reconciled(db, RazorpayRefundModel, rm.id, True)
-                matches_created += 1
+        refunds_by_payment[rm.rzp_payment_id].append(rm)
 
-    return matches_created
+    for rzp_payment_id, related_refunds in refunds_by_payment.items():
+        if rzp_payment_id not in payment_map:
+            for rm in related_refunds:
+                create_exception(db, "RZP", rm.id, "ORPHAN_REFUND", "HIGH")
+                exceptions_created += 1
+            continue
+
+        pm = payment_map[rzp_payment_id]
+        total_refunded = sum(r.amount for r in related_refunds)
+
+        # Determine the target amount to check against
+        target_refunded = pm.amount_refunded if pm.amount_refunded else total_refunded
+
+        if total_refunded > pm.amount:
+            for rm in related_refunds:
+                create_exception(db, "RZP", rm.id, "REFUND_EXCEEDS_GROSS", "HIGH")
+                exceptions_created += 1
+            continue
+
+        if total_refunded != target_refunded:
+            for rm in related_refunds:
+                create_exception(db, "RZP", rm.id, "REFUND_AMOUNT_MISMATCH", "HIGH")
+                exceptions_created += 1
+            continue
+
+        for rm in related_refunds:
+            if rm.status != "processed":
+                create_exception(db, "RZP", rm.id, "REFUND_STATUS_MISMATCH", "MEDIUM")
+                exceptions_created += 1
+                continue
+
+            if getattr(pm, "reconciliation_status", None) == "RECONCILED":
+                create_exception(db, "RZP", rm.id, "REFUND_AFTER_SETTLEMENT", "HIGH")
+                exceptions_created += 1
+                # Mark as reconciled because we captured the exception, but it is an anomaly
+                await _mark_reconciled(db, RazorpayRefundModel, rm.id, True)
+                continue
+
+            # If all good, match
+            match = ReconciliationMatchModel(match_type="REFUND_MATCH")
+            db.add(match)
+            await db.flush()
+            create_match_evidence(db, match, "RZP", rm.id)
+            create_match_evidence(db, match, "RZP", pm.id)
+            await _mark_reconciled(db, RazorpayRefundModel, rm.id, True)
+            matches_created += 1
+
+    return matches_created, exceptions_created
 async def generate_candidates(db: AsyncSession) -> int:
     candidates_created = 0
 
@@ -255,8 +303,9 @@ async def run_reconciliation(db: AsyncSession) -> RunReconciliationResponse:
     exceptions += e
 
     # Stage D
-    m = await stage_d_refund_aware_reconciliation(db)
+    m, e = await stage_d_refund_aware_reconciliation(db)
     matches += m
+    exceptions += e
 
     # Stage E - Candidate Generation (only for unresolved)
     c = await generate_candidates(db)

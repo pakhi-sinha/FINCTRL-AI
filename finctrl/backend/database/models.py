@@ -4,12 +4,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
-
-from sqlalchemy import JSON
-from sqlalchemy.dialects.postgresql import JSONB
-
-JSONType = JSON().with_variant(JSONB, "postgresql")
-
 from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Any

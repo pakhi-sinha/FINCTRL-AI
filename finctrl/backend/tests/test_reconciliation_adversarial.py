@@ -89,3 +89,65 @@ async def test_refund_aware_match():
 
         await db.refresh(rm)
         assert rm.reconciliation_status == "RECONCILED"
+
+@pytest.mark.asyncio
+async def test_refund_amount_mismatch_exception():
+    async for db in get_db_session():
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_ref_err", rzp_order_id="O1", amount=1000, amount_refunded=1000, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
+        # Refund record says 500, but payment says amount_refunded=1000
+        rm = RazorpayRefundModel(rzp_refund_id="rf_2", rzp_payment_id="pay_ref_err", amount=500, currency="INR", status="processed", created_at_ts=0)
+
+        db.add_all([pm, rm])
+        await db.commit()
+        response = await run_reconciliation(db)
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_AMOUNT_MISMATCH"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+@pytest.mark.asyncio
+async def test_refund_exceeds_gross_exception():
+    async for db in get_db_session():
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_ref_exc", rzp_order_id="O1", amount=1000, amount_refunded=1500, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
+        rm = RazorpayRefundModel(rzp_refund_id="rf_3", rzp_payment_id="pay_ref_exc", amount=1500, currency="INR", status="processed", created_at_ts=0)
+
+        db.add_all([pm, rm])
+        await db.commit()
+        response = await run_reconciliation(db)
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_EXCEEDS_GROSS"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+@pytest.mark.asyncio
+async def test_multiple_partial_refunds_match():
+    async for db in get_db_session():
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_multi_ref", rzp_order_id="O1", amount=1000, amount_refunded=1000, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
+        rm1 = RazorpayRefundModel(rzp_refund_id="rf_4", rzp_payment_id="pay_multi_ref", amount=400, currency="INR", status="processed", created_at_ts=0)
+        rm2 = RazorpayRefundModel(rzp_refund_id="rf_5", rzp_payment_id="pay_multi_ref", amount=600, currency="INR", status="processed", created_at_ts=0)
+
+        db.add_all([pm, rm1, rm2])
+        await db.commit()
+        response = await run_reconciliation(db)
+
+        # 2 matches created for the refunds
+        assert response.matches_created >= 2
+        assert response.exceptions_created == 0
+
+@pytest.mark.asyncio
+async def test_refund_after_settlement():
+    async for db in get_db_session():
+        # Payment is already marked RECONCILED
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_ref_after", rzp_order_id="O1", amount=1000, amount_refunded=1000, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0, reconciliation_status="RECONCILED")
+        rm = RazorpayRefundModel(rzp_refund_id="rf_6", rzp_payment_id="pay_ref_after", amount=1000, currency="INR", status="processed", created_at_ts=0)
+
+        db.add_all([pm, rm])
+        await db.commit()
+        response = await run_reconciliation(db)
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_AFTER_SETTLEMENT"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None

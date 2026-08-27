@@ -37,10 +37,7 @@ async def test_agent_investigate_and_resolve(db_setup):
 
         res = await db.execute(select(ReconciliationCandidateModel).filter_by(id=candidate_id))
         c = res.scalar_one()
-        # Mock passed but candidate stays PENDING if parser gracefully fails, let's just assert it ran via logs
-        logs = await db.execute(select(AuditLogModel).filter_by(entity_id=candidate_id))
-        assert len(logs.scalars().all()) > 0
-
+        assert c.status == "EXCEPTION" # because NO_MATCH
 
         res = await db.execute(select(AuditLogModel).filter_by(entity_id=candidate_id))
         logs = res.scalars().all()
