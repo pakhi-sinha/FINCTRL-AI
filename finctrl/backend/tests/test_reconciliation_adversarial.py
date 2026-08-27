@@ -225,3 +225,27 @@ async def test_settlement_refund_contribution():
         result = await db.execute(select(ExceptionModel).filter(ExceptionModel.anomaly_type.in_(["SETTLEMENT_SHORTFALL", "SETTLEMENT_EXCESS"])))
         exc = result.scalar_one_or_none()
         assert exc is None
+
+@pytest.mark.asyncio
+async def test_settlement_ignores_future_refund():
+    async for db in get_db_session():
+        # PM expects 1000 - 10 - 1 = 989
+        pm1 = RazorpayPaymentModel(rzp_payment_id="p4", rzp_order_id="O4", rzp_settlement_id="set_126", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING")
+
+        # We have a refund of 89 from the same payment but created AT T=10, while settlement was T=5.
+        rm1 = RazorpayRefundModel(rzp_refund_id="rf_9", rzp_payment_id="p4", amount=89, currency="INR", status="processed", created_at_ts=10)
+
+        # Settlement created_at_ts=5. Expected contribution should remain 989 because refund happened AFTER.
+        # But actual settlement is 900. Meaning there will be a shortfall exception of 89.
+        set1 = RazorpaySettlementModel(rzp_settlement_id="set_126", amount=900, fees=0, tax=0, status="C", created_at_ts=5)
+        bank = BankRecordModel(transaction_ref="tx_4", description="SETTLEMENT set_126", amount=900, type="CR", timestamp=datetime.utcnow(), status="C")
+
+        db.add_all([pm1, rm1, set1, bank])
+        await db.commit()
+
+        response = await run_reconciliation(db)
+
+        # Arithmetic match check calculated_net = 989 vs actual 900 -> SETTLEMENT_SHORTFALL
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="SETTLEMENT_SHORTFALL"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None

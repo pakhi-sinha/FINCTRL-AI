@@ -157,8 +157,7 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
             exceptions_created += 1
             continue
 
-        # Get refunds for all linked payments. In a real system, you'd verify if the refund was deducted from this specific settlement.
-        # Assuming refund records natively reduce the expected net.
+        # Get refunds for all linked payments to explicitly determine applicable ones based on timestamps
         refunds = await get_unresolved_rzp_refunds(db)
 
         calculated_net = 0
@@ -166,10 +165,10 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
             # gross - fee - tax
             pm_contribution = pm.amount - (pm.fee or 0) - (pm.tax or 0)
 
-            # subtract applicable refunds
+            # subtract applicable refunds deterministically (refund happened before or exactly at settlement creation)
             pm_refunds = [rm for rm in refunds if rm.rzp_payment_id == pm.rzp_payment_id]
             for rm in pm_refunds:
-                if rm.status == "processed":
+                if rm.status == "processed" and rm.created_at_ts <= sm.created_at_ts:
                     pm_contribution -= rm.amount
 
             calculated_net += pm_contribution
