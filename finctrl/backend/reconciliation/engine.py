@@ -147,16 +147,7 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
         for bank in bank_records:
             if bank.amount == expected_net and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
 
-                # Check for linked payments if we have them (e.g. via an association or if we kept settlement_id on payment)
-                # Note: In Phase 4 we sometimes inject rzp_settlement_id dynamically during tests since it's not on the Base model.
-                # In sqlite tests, it can end up in the JSON _data block if it's dynamic
-                linked_payments = []
-                for pm in payments:
-                    pm_settlement_id = getattr(pm, "rzp_settlement_id", getattr(pm, "_rzp_settlement_id", None))
-                    if not pm_settlement_id and hasattr(pm, "data") and isinstance(pm.data, dict):
-                        pm_settlement_id = pm.data.get("rzp_settlement_id")
-                    if pm_settlement_id == sm.rzp_settlement_id:
-                        linked_payments.append(pm)
+                linked_payments = [pm for pm in payments if pm.rzp_settlement_id == sm.rzp_settlement_id]
 
                 match = ReconciliationMatchModel(match_type="CONSOLIDATED")
                 db.add(match)
@@ -170,6 +161,8 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
                 # Link underlying payments and ERPs if complete
                 if linked_payments:
                     # check if sum of payment nets == settlement amount
+                    # expected contribution is gross - fee - tax - refunded amounts (if they hit this settlement)
+                    # For simplicity of deterministic rule: gross - fee - tax
                     calculated_net = sum([p.amount - (p.fee or 0) - (p.tax or 0) for p in linked_payments])
                     if calculated_net == expected_net:
                         for p in linked_payments:
@@ -181,8 +174,11 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
                                 e = erp_by_ref[p.rzp_order_id]
                                 create_match_evidence(db, match, "ERP", e.id)
                                 await _mark_reconciled(db, ERPRecordModel, e.id)
-                    else:
+                    elif calculated_net > expected_net:
                         create_exception(db, "RZP", sm.id, "SETTLEMENT_SHORTFALL", "HIGH")
+                        exceptions_created += 1
+                    else:
+                        create_exception(db, "RZP", sm.id, "SETTLEMENT_EXCESS", "HIGH")
                         exceptions_created += 1
 
                 matches_created += 1
@@ -217,16 +213,20 @@ async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, in
         pm = payment_map[rzp_payment_id]
         total_refunded = sum(r.amount for r in related_refunds)
 
-        # Determine the target amount to check against
-        target_refunded = pm.amount_refunded if pm.amount_refunded else total_refunded
-
         if total_refunded > pm.amount:
             for rm in related_refunds:
                 create_exception(db, "RZP", rm.id, "REFUND_EXCEEDS_GROSS", "HIGH")
                 exceptions_created += 1
             continue
 
-        if total_refunded != target_refunded:
+        # If payment refund tracking states amount_refunded is zero, but we have refund records, this is a mismatch
+        if pm.amount_refunded == 0 and total_refunded > 0:
+            for rm in related_refunds:
+                create_exception(db, "RZP", rm.id, "REFUND_AMOUNT_MISMATCH", "HIGH")
+                exceptions_created += 1
+            continue
+
+        if total_refunded != pm.amount_refunded:
             for rm in related_refunds:
                 create_exception(db, "RZP", rm.id, "REFUND_AMOUNT_MISMATCH", "HIGH")
                 exceptions_created += 1

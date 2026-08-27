@@ -105,6 +105,7 @@ class RazorpayPaymentModel(Base):
     source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
     rzp_payment_id = Column(String, index=True, nullable=False)
     rzp_order_id = Column(String, index=True, nullable=True)
+    rzp_settlement_id = Column(String, index=True, nullable=True)
     amount = Column(Integer, nullable=False)
     currency = Column(String, default="INR", nullable=False)
     status = Column(String, nullable=False)

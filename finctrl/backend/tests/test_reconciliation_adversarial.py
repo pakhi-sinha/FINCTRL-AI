@@ -48,11 +48,9 @@ async def test_negative_gross_amount_exception():
 
 @pytest.mark.asyncio
 async def test_settlement_shortfall_exception():
-    from unittest.mock import patch
-
     async for db in get_db_session():
         # We need a settlement matched to a bank record, but with linked payments that do not sum to expected net.
-        pm1 = RazorpayPaymentModel(rzp_payment_id="p1", rzp_order_id="O1", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING")
+        pm1 = RazorpayPaymentModel(rzp_payment_id="p1", rzp_order_id="O1", rzp_settlement_id="set_123", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING")
 
         # Expected net from payment: 1000 - 10 - 1 = 989.
         # But settlement says 900.
@@ -62,13 +60,7 @@ async def test_settlement_shortfall_exception():
         db.add_all([pm1, set1, bank])
         await db.commit()
 
-        # Fetch it back and manually set the volatile attribute so the engine sees it
-        await db.refresh(pm1)
-        setattr(pm1, "_rzp_settlement_id", "set_123")
-
-        # Mock get_unresolved_rzp_payments to return our patched instance
-        with patch("finctrl.backend.reconciliation.engine.get_unresolved_rzp_payments", return_value=[pm1]):
-            response = await run_reconciliation(db)
+        response = await run_reconciliation(db)
 
         assert response.exceptions_created >= 1
 
@@ -77,9 +69,30 @@ async def test_settlement_shortfall_exception():
         assert exc is not None
 
 @pytest.mark.asyncio
+async def test_settlement_excess_exception():
+    async for db in get_db_session():
+        # Expected net: 1000 - 10 - 1 = 989
+        pm1 = RazorpayPaymentModel(rzp_payment_id="p2", rzp_order_id="O2", rzp_settlement_id="set_124", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING")
+
+        # Actual settlement is 1100 (excess)
+        set1 = RazorpaySettlementModel(rzp_settlement_id="set_124", amount=1100, fees=0, tax=0, status="C", created_at_ts=0)
+        bank = BankRecordModel(transaction_ref="tx_2", description="SETTLEMENT set_124", amount=1100, type="CR", timestamp=datetime.utcnow(), status="C")
+
+        db.add_all([pm1, set1, bank])
+        await db.commit()
+
+        response = await run_reconciliation(db)
+
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="SETTLEMENT_EXCESS"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+@pytest.mark.asyncio
 async def test_refund_aware_match():
     async for db in get_db_session():
-        pm = RazorpayPaymentModel(rzp_payment_id="pay_ref", rzp_order_id="O1", amount=1000, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_ref", rzp_order_id="O1", amount=1000, amount_refunded=1000, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
         rm = RazorpayRefundModel(rzp_refund_id="rf_1", rzp_payment_id="pay_ref", amount=1000, currency="INR", status="processed", created_at_ts=0)
 
         db.add_all([pm, rm])
@@ -149,5 +162,21 @@ async def test_refund_after_settlement():
         assert response.exceptions_created >= 1
 
         result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_AFTER_SETTLEMENT"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+@pytest.mark.asyncio
+async def test_zero_provider_refund_amount_mismatch_exception():
+    async for db in get_db_session():
+        pm = RazorpayPaymentModel(rzp_payment_id="pay_zero_ref_err", rzp_order_id="O1", amount=1000, amount_refunded=0, fee=0, tax=0, currency="INR", status="CAPTURED", created_at_ts=0)
+        # Payment claims 0 refunded, but there is a refund record
+        rm = RazorpayRefundModel(rzp_refund_id="rf_7", rzp_payment_id="pay_zero_ref_err", amount=500, currency="INR", status="processed", created_at_ts=0)
+
+        db.add_all([pm, rm])
+        await db.commit()
+        response = await run_reconciliation(db)
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_AMOUNT_MISMATCH"))
         exc = result.scalar_one_or_none()
         assert exc is not None
