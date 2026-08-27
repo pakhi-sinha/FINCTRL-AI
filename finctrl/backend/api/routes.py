@@ -211,6 +211,7 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
             source_event_id=event_model.id,
             rzp_payment_id=record.rzp_payment_id,
             rzp_order_id=f"order_{record.id}",
+            rzp_settlement_id=record.rzp_settlement_id,
             amount=record.gross_amount,
             currency="INR",
             status=record.status,

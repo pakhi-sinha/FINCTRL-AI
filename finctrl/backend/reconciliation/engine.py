@@ -135,19 +135,60 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
 
     settlements = await get_unresolved_rzp_settlements(db)
     bank_records = await get_unresolved_bank(db)
-    payments = await get_unresolved_rzp_payments(db)
-    erp_records = await get_unresolved_erp(db)
+
+    # We need ALL payments (even if resolved by Stage A) to calculate the settlement net correctly
+    result = await db.execute(select(RazorpayPaymentModel))
+    payments = list(result.scalars().all())
+
+    # Re-fetch ERP records in case we need to match them or mark them
+    result_erp = await db.execute(select(ERPRecordModel))
+    erp_records = list(result_erp.scalars().all())
 
     erp_by_ref = {e.reference_id: e for e in erp_records}
 
     for sm in settlements:
-        expected_net = sm.amount
+        actual_settlement_amount = sm.amount
 
-        # Look for Bank Match
+        # Find ALL linked payments
+        linked_payments = [pm for pm in payments if pm.rzp_settlement_id == sm.rzp_settlement_id]
+
+        if not linked_payments:
+            create_exception(db, "RZP", sm.id, "INCOMPLETE_PAYMENT_LINKAGE", "HIGH")
+            exceptions_created += 1
+            continue
+
+        # Get refunds for all linked payments. In a real system, you'd verify if the refund was deducted from this specific settlement.
+        # Assuming refund records natively reduce the expected net.
+        refunds = await get_unresolved_rzp_refunds(db)
+
+        calculated_net = 0
+        for pm in linked_payments:
+            # gross - fee - tax
+            pm_contribution = pm.amount - (pm.fee or 0) - (pm.tax or 0)
+
+            # subtract applicable refunds
+            pm_refunds = [rm for rm in refunds if rm.rzp_payment_id == pm.rzp_payment_id]
+            for rm in pm_refunds:
+                if rm.status == "processed":
+                    pm_contribution -= rm.amount
+
+            calculated_net += pm_contribution
+
+        # Arithmetic match Check
+        if calculated_net > actual_settlement_amount:
+            create_exception(db, "RZP", sm.id, "SETTLEMENT_SHORTFALL", "HIGH")
+            exceptions_created += 1
+            continue
+        elif calculated_net < actual_settlement_amount:
+            create_exception(db, "RZP", sm.id, "SETTLEMENT_EXCESS", "HIGH")
+            exceptions_created += 1
+            continue
+
+        # Look for Bank Match only after arithmetic passes
+        bank_matched = False
         for bank in bank_records:
-            if bank.amount == expected_net and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
-
-                linked_payments = [pm for pm in payments if pm.rzp_settlement_id == sm.rzp_settlement_id]
+            if bank.amount == actual_settlement_amount and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
+                bank_matched = True
 
                 match = ReconciliationMatchModel(match_type="CONSOLIDATED")
                 db.add(match)
@@ -158,32 +199,23 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
                 await _mark_reconciled(db, RazorpaySettlementModel, sm.id, True)
                 await _mark_reconciled(db, BankRecordModel, bank.id)
 
-                # Link underlying payments and ERPs if complete
-                if linked_payments:
-                    # check if sum of payment nets == settlement amount
-                    # expected contribution is gross - fee - tax - refunded amounts (if they hit this settlement)
-                    # For simplicity of deterministic rule: gross - fee - tax
-                    calculated_net = sum([p.amount - (p.fee or 0) - (p.tax or 0) for p in linked_payments])
-                    if calculated_net == expected_net:
-                        for p in linked_payments:
-                            create_match_evidence(db, match, "RZP", p.id)
-                            await _mark_reconciled(db, RazorpayPaymentModel, p.id, True)
+                for p in linked_payments:
+                    create_match_evidence(db, match, "RZP", p.id)
+                    await _mark_reconciled(db, RazorpayPaymentModel, p.id, True)
 
-                            # Find ERP
-                            if p.rzp_order_id and p.rzp_order_id in erp_by_ref:
-                                e = erp_by_ref[p.rzp_order_id]
-                                create_match_evidence(db, match, "ERP", e.id)
-                                await _mark_reconciled(db, ERPRecordModel, e.id)
-                    elif calculated_net > expected_net:
-                        create_exception(db, "RZP", sm.id, "SETTLEMENT_SHORTFALL", "HIGH")
-                        exceptions_created += 1
-                    else:
-                        create_exception(db, "RZP", sm.id, "SETTLEMENT_EXCESS", "HIGH")
-                        exceptions_created += 1
+                    # Find ERP
+                    if p.rzp_order_id and p.rzp_order_id in erp_by_ref:
+                        e = erp_by_ref[p.rzp_order_id]
+                        create_match_evidence(db, match, "ERP", e.id)
+                        await _mark_reconciled(db, ERPRecordModel, e.id)
 
                 matches_created += 1
                 bank_records.remove(bank)
                 break
+
+        if not bank_matched:
+            create_exception(db, "RZP", sm.id, "MISSING_BANK_TRANSACTION_FOR_SETTLEMENT", "HIGH")
+            exceptions_created += 1
 
     return matches_created, exceptions_created
 

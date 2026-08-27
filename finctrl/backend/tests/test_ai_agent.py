@@ -65,7 +65,7 @@ async def test_agent_investigate_and_exception(db_setup):
 
         res = await db.execute(select(ReconciliationCandidateModel).filter_by(id=candidate_id))
         c = res.scalar_one()
-        assert c.status in ["EXCEPTION", "HUMAN_REVIEW_REQUIRED"]
+        assert c.status == "EXCEPTION"
 
         res = await db.execute(select(ExceptionModel).filter_by(record_id=candidate_id))
         exc = res.scalars().all()

@@ -53,8 +53,9 @@ async def test_consolidated_settlement():
     async for db in get_db_session():
         erp1 = ERPRecordModel(reference_id="O1", amount=1000, timestamp=datetime.utcnow(), type="SALE", status="P")
         erp2 = ERPRecordModel(reference_id="O2", amount=2000, timestamp=datetime.utcnow(), type="SALE", status="P")
-        rzp1 = RazorpayPaymentModel(rzp_payment_id="p1", rzp_order_id="O1", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0)
-        rzp2 = RazorpayPaymentModel(rzp_payment_id="p2", rzp_order_id="O2", amount=2000, fee=20, tax=2, currency="INR", status="C", created_at_ts=0)
+        rzp1 = RazorpayPaymentModel(rzp_payment_id="p1", rzp_order_id="O1", rzp_settlement_id="set_123", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0)
+        rzp2 = RazorpayPaymentModel(rzp_payment_id="p2", rzp_order_id="O2", rzp_settlement_id="set_123", amount=2000, fee=20, tax=2, currency="INR", status="C", created_at_ts=0)
+        # Gross: 3000. Fee: 30. Tax: 3. Expected Net = 2967.
         set1 = RazorpaySettlementModel(rzp_settlement_id="set_123", amount=2967, fees=30, tax=3, status="C", created_at_ts=0)
         bank = BankRecordModel(transaction_ref="tx_1", description="SETTLEMENT set_123", amount=2967, type="CR", timestamp=datetime.utcnow(), status="C")
         db.add_all([erp1, erp2, rzp1, rzp2, set1, bank])

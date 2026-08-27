@@ -180,3 +180,48 @@ async def test_zero_provider_refund_amount_mismatch_exception():
         result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="REFUND_AMOUNT_MISMATCH"))
         exc = result.scalar_one_or_none()
         assert exc is not None
+
+@pytest.mark.asyncio
+async def test_incomplete_payment_linkage():
+    async for db in get_db_session():
+        # A settlement exists without any payments linking to it.
+        set1 = RazorpaySettlementModel(rzp_settlement_id="set_999", amount=900, fees=100, tax=0, status="C", created_at_ts=0)
+        bank = BankRecordModel(transaction_ref="tx_999", description="SETTLEMENT set_999", amount=900, type="CR", timestamp=datetime.utcnow(), status="C")
+
+        db.add_all([set1, bank])
+        await db.commit()
+
+        response = await run_reconciliation(db)
+
+        # 1 exception for missing payment linkages
+        assert response.exceptions_created >= 1
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="INCOMPLETE_PAYMENT_LINKAGE"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+@pytest.mark.asyncio
+async def test_settlement_refund_contribution():
+    async for db in get_db_session():
+        # PM expects 1000 - 10 - 1 = 989
+        pm1 = RazorpayPaymentModel(rzp_payment_id="p3", rzp_order_id="O3", rzp_settlement_id="set_125", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING")
+
+        # We also have a refund of 89 from the same payment that should be deducted. Expected net: 989 - 89 = 900
+        rm1 = RazorpayRefundModel(rzp_refund_id="rf_8", rzp_payment_id="p3", amount=89, currency="INR", status="processed", created_at_ts=0)
+
+        # Actual settlement is 900 (perfect match due to refund inclusion)
+        set1 = RazorpaySettlementModel(rzp_settlement_id="set_125", amount=900, fees=0, tax=0, status="C", created_at_ts=0)
+        bank = BankRecordModel(transaction_ref="tx_3", description="SETTLEMENT set_125", amount=900, type="CR", timestamp=datetime.utcnow(), status="C")
+
+        db.add_all([pm1, rm1, set1, bank])
+        await db.commit()
+
+        response = await run_reconciliation(db)
+
+        # It should create matches, no settlement shortfall exception
+        assert response.matches_created >= 1
+
+        # Verify no settlement shortfall or excess
+        result = await db.execute(select(ExceptionModel).filter(ExceptionModel.anomaly_type.in_(["SETTLEMENT_SHORTFALL", "SETTLEMENT_EXCESS"])))
+        exc = result.scalar_one_or_none()
+        assert exc is None
