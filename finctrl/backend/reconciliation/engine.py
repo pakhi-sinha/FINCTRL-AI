@@ -157,8 +157,10 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
             exceptions_created += 1
             continue
 
-        # Get refunds for all linked payments to explicitly determine applicable ones based on timestamps
-        refunds = await get_unresolved_rzp_refunds(db)
+        # Get refunds for all linked payments to explicitly determine applicable ones based on timestamps.
+        # MUST include all refunds, not just unresolved ones, to maintain idempotency regardless of Stage D execution state.
+        result_refunds = await db.execute(select(RazorpayRefundModel))
+        refunds = list(result_refunds.scalars().all())
 
         calculated_net = 0
         for pm in linked_payments:

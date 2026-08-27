@@ -249,3 +249,41 @@ async def test_settlement_ignores_future_refund():
         result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="SETTLEMENT_SHORTFALL"))
         exc = result.scalar_one_or_none()
         assert exc is not None
+
+@pytest.mark.asyncio
+async def test_idempotent_settlement_calculation_with_reconciled_refund():
+    async for db in get_db_session():
+        # Insert Payment, Refund, Settlement, NO Bank
+        pm1 = RazorpayPaymentModel(rzp_payment_id="p5", rzp_order_id="O5", rzp_settlement_id="set_127", amount=1000, fee=10, tax=1, currency="INR", status="C", created_at_ts=0, reconciliation_status="PENDING", amount_refunded=89)
+        rm1 = RazorpayRefundModel(rzp_refund_id="rf_10", rzp_payment_id="p5", amount=89, currency="INR", status="processed", created_at_ts=0, reconciliation_status="UNRECONCILED")
+        set1 = RazorpaySettlementModel(rzp_settlement_id="set_127", amount=900, fees=0, tax=0, status="C", created_at_ts=5, reconciliation_status="UNRECONCILED")
+
+        db.add_all([pm1, rm1, set1])
+        await db.commit()
+
+        # Run 1
+        response1 = await run_reconciliation(db)
+
+        # Refund should be reconciled by Stage D. Settlement misses bank.
+        await db.refresh(rm1)
+        assert rm1.reconciliation_status == "RECONCILED"
+
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="MISSING_BANK_TRANSACTION_FOR_SETTLEMENT"))
+        exc = result.scalar_one_or_none()
+        assert exc is not None
+
+        # Add bank record perfectly matching the expected net (900)
+        bank = BankRecordModel(transaction_ref="tx_5", description="SETTLEMENT set_127", amount=900, type="CR", timestamp=datetime.utcnow(), status="C")
+        db.add(bank)
+        await db.commit()
+
+        # Run 2
+        response2 = await run_reconciliation(db)
+
+        # We must see the settlement matched successfully now (CONSOLIDATED), without a settlement shortfall
+        # If the reconciled refund was excluded, calculated net would be 989 -> SETTLEMENT_SHORTFALL exception would trigger.
+        result_shortfall = await db.execute(select(ExceptionModel).filter_by(anomaly_type="SETTLEMENT_SHORTFALL"))
+        assert result_shortfall.scalar_one_or_none() is None
+
+        await db.refresh(set1)
+        assert set1.reconciliation_status == "RECONCILED"

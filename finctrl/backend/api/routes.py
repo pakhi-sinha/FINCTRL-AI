@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
+from datetime import datetime
 
 from finctrl.backend.database.database import get_db_session
 
@@ -116,6 +117,7 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
                 )
                 db.add(sm)
         event_model.processing_status = "PROCESSED"
+        event_model.processed_at = datetime.utcnow()
     except Exception as e:
         event_model.processing_status = "FAILED"
         event_model.error_message = str(e)
@@ -149,7 +151,8 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
             event_type="erp.upload",
             payload_hash=payload_hash,
             raw_payload=raw_payload,
-            processing_status="PROCESSED"
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
         )
         db.add(event_model)
         await db.flush()
@@ -191,7 +194,8 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
             event_type="legacy.upload",
             payload_hash=payload_hash,
             raw_payload=raw_payload,
-            processing_status="PROCESSED"
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
         )
         db.add(event_model)
         await db.flush()
@@ -263,7 +267,8 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
             event_type="bank.upload",
             payload_hash=payload_hash,
             raw_payload=raw_payload,
-            processing_status="PROCESSED"
+            processing_status="PROCESSED",
+            processed_at=datetime.utcnow()
         )
         db.add(event_model)
         await db.flush()
