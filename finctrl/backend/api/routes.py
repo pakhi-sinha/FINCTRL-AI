@@ -90,7 +90,20 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
     await db.flush()
 
     try:
-        if event_type == "payment.captured":
+        if event_type == "order.paid":
+            order_data = payload.get("payload", {}).get("order", {}).get("entity", {})
+            if order_data:
+                om = RazorpayOrderModel(
+                    source_event_id=event_model.id,
+                    rzp_order_id=order_data.get("id"),
+                    receipt=order_data.get("receipt"),
+                    amount=order_data.get("amount", 0),
+                    amount_due=order_data.get("amount_due", 0),
+                    status=order_data.get("status"),
+                    created_at_ts=order_data.get("created_at", 0)
+                )
+                db.add(om)
+        elif event_type == "payment.captured":
             payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
             if payment_data:
                 pm = RazorpayPaymentModel(
@@ -116,6 +129,20 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
                     created_at_ts=settlement_data.get("created_at", 0)
                 )
                 db.add(sm)
+        elif event_type == "refund.processed":
+            refund_data = payload.get("payload", {}).get("refund", {}).get("entity", {})
+            if refund_data:
+                rm = RazorpayRefundModel(
+                    source_event_id=event_model.id,
+                    rzp_refund_id=refund_data.get("id"),
+                    rzp_payment_id=refund_data.get("payment_id"),
+                    amount=refund_data.get("amount", 0),
+                    currency=refund_data.get("currency", "INR"),
+                    status=refund_data.get("status"),
+                    receipt=refund_data.get("receipt"),
+                    created_at_ts=refund_data.get("created_at", 0)
+                )
+                db.add(rm)
         event_model.processing_status = "PROCESSED"
         event_model.processed_at = datetime.utcnow()
     except Exception as e:
@@ -356,3 +383,92 @@ async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(g
             } for log in logs
         ]
     }
+
+from finctrl.backend.api.cash_position_schema import CashPositionResponse
+
+@router.get("/cash-position", response_model=CashPositionResponse)
+async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
+    # Realized cash: Sum of all RECONCILED Bank Records matching settlements
+    realized_cash_result = await db.execute(
+        select(BankRecordModel).filter(BankRecordModel.status == "RECONCILED", BankRecordModel.type == "CREDIT")
+    )
+    realized_cash_records = realized_cash_result.scalars().all()
+    current_realized_cash = sum(r.amount for r in realized_cash_records)
+
+    # Captured but unsettled amounts (Payments captured but not reconciled/settled)
+    unsettled_payments_result = await db.execute(
+        select(RazorpayPaymentModel).filter(
+            RazorpayPaymentModel.status == "CAPTURED",
+            RazorpayPaymentModel.reconciliation_status != "RECONCILED"
+        )
+    )
+    unsettled_payments = unsettled_payments_result.scalars().all()
+
+    captured_unsettled_amount = 0
+    known_fees = 0
+    known_tax = 0
+
+    for pm in unsettled_payments:
+        captured_unsettled_amount += pm.amount
+        known_fees += pm.fee or 0
+        known_tax += pm.tax or 0
+
+    # Expected refunds (Processed refunds that are not yet reconciled with settlements)
+    expected_refunds_result = await db.execute(
+        select(RazorpayRefundModel).filter(
+            RazorpayRefundModel.status == "processed",
+            RazorpayRefundModel.reconciliation_status != "RECONCILED"
+        )
+    )
+    expected_refunds_records = expected_refunds_result.scalars().all()
+    expected_refunds = sum(r.amount for r in expected_refunds_records)
+
+    projected_cash_position = current_realized_cash + captured_unsettled_amount - known_fees - known_tax - expected_refunds
+
+    return CashPositionResponse(
+        current_realized_cash=current_realized_cash,
+        captured_unsettled_amount=captured_unsettled_amount,
+        expected_refunds=expected_refunds,
+        known_fees=known_fees,
+        known_tax=known_tax,
+        projected_cash_position=projected_cash_position,
+        records_analyzed=len(realized_cash_records) + len(unsettled_payments) + len(expected_refunds_records)
+    )
+
+from finctrl.backend.api.metrics_schema import MetricsResponse
+from sqlalchemy import func
+
+@router.get("/metrics", response_model=MetricsResponse)
+async def get_metrics(db: AsyncSession = Depends(get_db_session)):
+
+    processed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "PROCESSED"))
+    records_processed = processed_count.scalar() or 0
+
+    failed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "FAILED"))
+    processing_failures = failed_count.scalar() or 0
+
+    reconciled_count = await db.execute(select(func.count(ReconciliationMatchModel.id)))
+    records_reconciled = reconciled_count.scalar() or 0
+
+    exception_count = await db.execute(select(func.count(ExceptionModel.id)))
+    exceptions_created = exception_count.scalar() or 0
+
+    resolved_exceptions = await db.execute(select(func.count(ExceptionModel.id)).filter(ExceptionModel.status == "RESOLVED"))
+    exceptions_resolved = resolved_exceptions.scalar() or 0
+
+    escalated_exceptions = await db.execute(select(func.count(ExceptionModel.id)).filter(ExceptionModel.status == "ESCALATED"))
+    exceptions_escalated = escalated_exceptions.scalar() or 0
+
+    candidate_count = await db.execute(select(func.count(ReconciliationCandidateModel.id)))
+    candidates_created = candidate_count.scalar() or 0
+
+    return MetricsResponse(
+        records_processed=records_processed,
+        records_reconciled=records_reconciled,
+        exceptions_created=exceptions_created,
+        exceptions_resolved=exceptions_resolved,
+        exceptions_escalated=exceptions_escalated,
+        candidates_created=candidates_created,
+        processing_failures=processing_failures,
+        average_investigation_latency=0.0 # Placeholder
+    )
