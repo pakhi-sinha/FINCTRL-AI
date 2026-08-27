@@ -55,3 +55,19 @@ async def test_webhook_signature_validation():
         resp6 = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_124", "x-razorpay-signature": valid_sig})
         assert resp6.status_code == 500
         assert "Webhook secret not configured" in resp6.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_webhook_processing_failure():
+    settings.RAZORPAY_KEY_SECRET = "test_secret"
+
+    # Intentionally broken payload format to trigger parsing error
+    payload = {"event": "payment.captured", "payload": "NOT_A_DICT"}
+    body = json.dumps(payload).encode()
+
+    valid_sig = hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_broken", "x-razorpay-signature": valid_sig})
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Processing failed"

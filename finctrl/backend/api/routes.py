@@ -16,6 +16,7 @@ from finctrl.backend.database.models import (
     RazorpayRefundModel,
     BankRecordModel,
     ReconciliationMatchModel,
+    MatchEvidenceModel,
     ReconciliationCandidateModel,
     ExceptionModel
 )
@@ -145,12 +146,13 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
                 db.add(rm)
         event_model.processing_status = "PROCESSED"
         event_model.processed_at = datetime.utcnow()
+        await db.commit()
+        return {"status": "ok", "event_id": str(event_model.id)}
     except Exception as e:
         event_model.processing_status = "FAILED"
         event_model.error_message = str(e)
-
-    await db.commit()
-    return {"status": "ok", "event_id": str(event_model.id)}
+        await db.commit()
+        raise HTTPException(status_code=500, detail="Processing failed")
 
 
 @router.get("/health", response_model=HealthCheckResponse)
@@ -389,8 +391,19 @@ from finctrl.backend.api.cash_position_schema import CashPositionResponse
 @router.get("/cash-position", response_model=CashPositionResponse)
 async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
     # Realized cash: Sum of all RECONCILED Bank Records matching settlements
+    # Ensure they are linked to a Razorpay Settlement in MatchEvidenceModel
     realized_cash_result = await db.execute(
-        select(BankRecordModel).filter(BankRecordModel.status == "RECONCILED", BankRecordModel.type == "CREDIT")
+        select(BankRecordModel).join(
+            MatchEvidenceModel,
+            MatchEvidenceModel.record_id == BankRecordModel.id
+        ).join(
+            ReconciliationMatchModel,
+            ReconciliationMatchModel.id == MatchEvidenceModel.match_id
+        ).filter(
+            BankRecordModel.status == "RECONCILED",
+            BankRecordModel.type == "CREDIT",
+            ReconciliationMatchModel.match_type == "CONSOLIDATED"
+        )
     )
     realized_cash_records = realized_cash_result.scalars().all()
     current_realized_cash = sum(r.amount for r in realized_cash_records)
@@ -469,6 +482,5 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
         exceptions_resolved=exceptions_resolved,
         exceptions_escalated=exceptions_escalated,
         candidates_created=candidates_created,
-        processing_failures=processing_failures,
-        average_investigation_latency=0.0 # Placeholder
+        processing_failures=processing_failures
     )

@@ -10,4 +10,3 @@ class MetricsResponse(BaseModel):
 
     # Timing/Latency metrics mapped dynamically (can just be simple counters for now based on FinancialEvents if latency isn't persisted)
     processing_failures: int
-    average_investigation_latency: float
