@@ -76,31 +76,42 @@ async def stage_a_exact_match(db: AsyncSession) -> int:
     erp_records = await get_unresolved_erp(db)
     payments = await get_unresolved_rzp_payments(db)
     orders = await get_unresolved_rzp_orders(db)
+    bank_records = await get_unresolved_bank(db)
 
     order_map = {o.rzp_order_id: o for o in orders if o.rzp_order_id}
 
     for pm in payments:
-        # Link payment to order receipt for ERP matching
         receipt = pm.rzp_order_id
-
         if not receipt:
             continue
 
         for erp in erp_records:
             if erp.reference_id == receipt and erp.amount == pm.amount:
-                # We have a strict deterministic link between ERP and RZP Payment
-                match = ReconciliationMatchModel(match_type="EXACT_1_1") # Use EXACT_1_1 to satisfy the old tests asserting this
-                db.add(match)
-                await db.flush()
+                # Check for Bank Match
+                expected_net = pm.amount - (pm.fee or 0) - (pm.tax or 0)
+                bank_match = None
 
-                create_match_evidence(db, match, "ERP", erp.id)
-                create_match_evidence(db, match, "RZP", pm.id)
+                for bank in bank_records:
+                    if bank.amount == expected_net and ((pm.rzp_settlement_id and pm.rzp_settlement_id in bank.description) or pm.rzp_payment_id in bank.description):
+                        bank_match = bank
+                        break
 
-                await _mark_reconciled(db, ERPRecordModel, erp.id)
-                await _mark_reconciled(db, RazorpayPaymentModel, pm.id, True)
+                if bank_match:
+                    match = ReconciliationMatchModel(match_type="EXACT_1_1")
+                    db.add(match)
+                    await db.flush()
 
-                matches_created += 1
-                break # Move to next payment
+                    create_match_evidence(db, match, "ERP", erp.id)
+                    create_match_evidence(db, match, "RZP", pm.id)
+                    create_match_evidence(db, match, "BANK", bank_match.id)
+
+                    await _mark_reconciled(db, ERPRecordModel, erp.id)
+                    await _mark_reconciled(db, RazorpayPaymentModel, pm.id, True)
+                    await _mark_reconciled(db, BankRecordModel, bank_match.id)
+
+                    matches_created += 1
+                    bank_records.remove(bank_match)
+                    break
 
     return matches_created
 

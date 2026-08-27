@@ -61,6 +61,12 @@ async def test_consolidated_settlement():
         db.add_all([erp1, erp2, rzp1, rzp2, set1, bank])
         await db.commit()
         response = await run_reconciliation(db)
-        assert response.matches_created == 3
+
+        # Stage C now matches these cleanly via CONSOLIDATED Match.
+        assert response.matches_created == 1
+
+        # Verify the matches correctly reconcile the underlying records
         await db.refresh(erp1)
+        await db.refresh(erp2)
         assert erp1.status == "RECONCILED"
+        assert erp2.status == "RECONCILED"
