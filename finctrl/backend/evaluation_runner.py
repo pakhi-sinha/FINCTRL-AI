@@ -47,7 +47,7 @@ async def run_evaluation(dataset_path: str) -> Dict[str, Any]:
         matches_q = await db.execute(select(ReconciliationMatchModel).options(selectinload(ReconciliationMatchModel.evidence)))
         all_matches = matches_q.scalars().all()
 
-        from finctrl.backend.database.models import ERPRecordModel, RazorpayPaymentModel, RazorpaySettlementModel, BankRecordModel
+        from finctrl.backend.database.models import ERPRecordModel, RazorpayPaymentModel, RazorpaySettlementModel, BankRecordModel, FinancialEventModel
         # Build map of what we matched
         # Our match -> set of stable external/business IDs to compare against ground truth
         our_matches = []
@@ -61,21 +61,45 @@ async def run_evaluation(dataset_path: str) -> Dict[str, Any]:
                 elif ev.record_type == "RZP":
                     rec = await db.execute(select(RazorpayPaymentModel).filter_by(id=ev.record_id))
                     p = rec.scalar_one_or_none()
-                    if p: s.add(str(p.source_event_id)) # ground_truth uses the ID (which maps to source_event_id for RZP records)
+                    if p:
+                        # RZP: use rzp_payment_id as explicitly requested
+                        s.add(str(p.rzp_payment_id))
                     else:
                         rec = await db.execute(select(RazorpaySettlementModel).filter_by(id=ev.record_id))
                         p = rec.scalar_one_or_none()
-                        if p: s.add(str(p.source_event_id))
+                        if p:
+                            # Or rzp_settlement_id for settlements
+                            s.add(str(p.rzp_settlement_id))
                 elif ev.record_type == "BANK":
                     rec = await db.execute(select(BankRecordModel).filter_by(id=ev.record_id))
                     p = rec.scalar_one_or_none()
-                    if p: s.add(str(p.id)) # ground truth uses the ID for BANK records
+                    if p:
+                        e = await db.execute(select(FinancialEventModel).filter_by(id=p.source_event_id))
+                        pe = e.scalar_one_or_none()
+                        if pe: s.add(str(pe.provider_event_id))
             our_matches.append(s)
+
+        # Build ground truth sets normalizing RZP to rzp_payment_id to match our logic
+        # Ground truth stores rzp_records as the event UUID. We need to map that back to rzp_payment_id
+        # based on the dataset to perform the correct check as requested.
+        with open(dataset_path, "r") as ds_f:
+            ds_data = json.load(ds_f)
+
+        rzp_event_to_payment_id = {}
+        for r in ds_data.get("rzp_records", []):
+            if "rzp_payment_id" in r:
+                rzp_event_to_payment_id[r["id"]] = r["rzp_payment_id"]
+            elif "id" in r and r.get("type") == "settlement":
+                rzp_event_to_payment_id[r["id"]] = r.get("rzp_settlement_id", r["id"])
 
         for group in ground_truth.get("groups", []):
             if group.get("expected_outcome") == "MATCH":
-                # Find exactly the set of expected IDs
-                expected_set = set(group.get("erp_record_ids", []) + group.get("rzp_record_ids", []) + group.get("bank_record_ids", []))
+                # Find exactly the set of expected IDs, normalizing RZP
+                expected_set = set()
+                expected_set.update(group.get("erp_record_ids", []))
+                expected_set.update(group.get("bank_record_ids", []))
+                for rzp_ev_id in group.get("rzp_record_ids", []):
+                    expected_set.add(rzp_event_to_payment_id.get(rzp_ev_id, rzp_ev_id))
 
                 # Check if we have this exact match
                 if expected_set in our_matches:

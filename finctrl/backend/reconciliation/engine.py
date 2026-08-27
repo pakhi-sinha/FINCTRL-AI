@@ -85,6 +85,10 @@ async def stage_a_exact_match(db: AsyncSession) -> int:
         if not receipt:
             continue
 
+        # In legacy mode, receipt might be mapped to order_receipt in the order model, not directly in rzp_order_id
+        if receipt in order_map and order_map[receipt].receipt:
+             receipt = order_map[receipt].receipt
+
         for erp in erp_records:
             if erp.reference_id == receipt and erp.amount == pm.amount:
                 # Check for Bank Match
