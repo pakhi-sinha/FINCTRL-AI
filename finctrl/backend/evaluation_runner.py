@@ -1,3 +1,6 @@
+import os
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+
 import asyncio
 import json
 import time
@@ -16,9 +19,6 @@ async def run_evaluation(dataset_path: str) -> Dict[str, Any]:
     with open(ground_truth_path, "r") as f:
         ground_truth = json.load(f)
 
-    # Initialize fresh in-memory DB for evaluation execution
-    import os
-    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
     await init_db()
 
     start_time = time.time()
