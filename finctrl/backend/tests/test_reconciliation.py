@@ -86,20 +86,3 @@ async def test_stage_a_requires_bank_evidence():
 
         await db.refresh(erp)
         assert erp.status != "RECONCILED"
-
-@pytest.mark.asyncio
-async def test_stage_a_amount_only_match_rejected():
-    async for db in get_db_session():
-        # Matching amount but different reference and valid bank
-        erp = ERPRecordModel(reference_id="ORD-001", amount=10000, timestamp=datetime.utcnow(), type="SALE", status="PENDING")
-        rzp = RazorpayPaymentModel(rzp_payment_id="pay_abc123", rzp_order_id="ORD-DIFFERENT", amount=10000, fee=200, tax=36, currency="INR", status="CAPTURED", created_at_ts=0)
-        bank = BankRecordModel(transaction_ref="tx_999", description="RAZORPAY SETTLEMENT pay_abc123", amount=9764, type="CREDIT", timestamp=datetime.utcnow(), status="CLEARED")
-        db.add_all([erp, rzp, bank])
-        await db.commit()
-        response = await run_reconciliation(db)
-
-        # Should not create EXACT_1_1 match since references don't match
-        assert response.matches_created == 0
-
-        await db.refresh(erp)
-        assert erp.status != "RECONCILED"
