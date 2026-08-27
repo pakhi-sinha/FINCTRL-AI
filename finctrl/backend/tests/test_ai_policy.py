@@ -29,7 +29,7 @@ def test_auto_resolve_valid():
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "rzp_order_id": "refA"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["AUTO_RESOLVE", "HUMAN_REVIEW_REQUIRED", "REJECTED"]
+    assert decision.action == "AUTO_RESOLVE"
 
 def test_human_review_required():
     proposal = ProposedMatchSchema(classification="MATCH", recommended_action="HUMAN_REVIEW_REQUIRED", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, requires_human_approval=True, reason="test")
@@ -37,7 +37,7 @@ def test_human_review_required():
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "rzp_order_id": "refA"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["HUMAN_REVIEW_REQUIRED", "REJECTED"]
+    assert decision.action == "HUMAN_REVIEW_REQUIRED"
 
 def test_exception_low_confidence():
     proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.60, reason="test")
@@ -45,31 +45,31 @@ def test_exception_low_confidence():
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "rzp_order_id": "refA"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["HUMAN_REVIEW_REQUIRED", "EXCEPTION", "REJECTED"]
+    assert decision.action == "EXCEPTION"
 
 def test_incomplete_1_n_rejected():
-    proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
+    proposal = ProposedMatchSchema(classification="MATCH", match_type="ONE_TO_MANY", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
     evidence = EvidencePackage(candidate={})
     evidence.erp_records = [{"id": "erp-1", "amount": 200, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "rzp_order_id": "refA", "rzp_settlement_id": "set1"}, {"id": "rzp-2", "amount": 100, "rzp_order_id": "refB", "rzp_settlement_id": "set1"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["REJECTED", "HUMAN_REVIEW_REQUIRED"]
+    assert decision.action == "REJECTED"
 
 def test_fee_discrepancy_rejected_if_amounts_dont_align():
-    proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
+    proposal = ProposedMatchSchema(classification="MATCH", match_type="FEE_DISCREPANCY", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
     evidence = EvidencePackage(candidate={})
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "fee": 5, "tax": 0, "rzp_order_id": "refA"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["REJECTED", "HUMAN_REVIEW_REQUIRED"]
+    assert decision.action == "REJECTED"
 
 def test_partial_match_rejected():
-    proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
+    proposal = ProposedMatchSchema(classification="MATCH", match_type="PARTIAL", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="test")
     evidence = EvidencePackage(candidate={})
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "refA"}]
     evidence.rzp_records = [{"id": "rzp-1", "amount": 100, "fee": 5, "tax": 0, "rzp_order_id": "refA"}]
     decision = evaluate_policy(proposal, evidence)
-    assert decision.action in ["REJECTED", "HUMAN_REVIEW_REQUIRED"]
+    assert decision.action == "REJECTED"
 
 def test_adversarial_same_amount_unrelated_ref_and_date():
     proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1", "rzp-1"], confidence=0.99, reason="looks good")
@@ -80,7 +80,7 @@ def test_adversarial_same_amount_unrelated_ref_and_date():
     assert decision.action == "REJECTED"
 
 def test_adversarial_high_conf_insufficient_evidence():
-    proposal = ProposedMatchSchema(classification="MATCH", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1"], confidence=0.99, reason="trust me")
+    proposal = ProposedMatchSchema(classification="MATCH", match_type="ONE_TO_ONE", recommended_action="AUTO_RESOLVE", risk_level="LOW", supporting_evidence=["erp-1"], confidence=0.99, reason="trust me")
     evidence = EvidencePackage(candidate={})
     evidence.erp_records = [{"id": "erp-1", "amount": 100, "reference_id": "apple", "timestamp": "2023-01-01"}]
     decision = evaluate_policy(proposal, evidence)

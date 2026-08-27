@@ -60,6 +60,6 @@ async def test_consolidated_settlement():
         db.add_all([erp1, erp2, rzp1, rzp2, set1, bank])
         await db.commit()
         response = await run_reconciliation(db)
-        assert response.matches_created >= 1
+        assert response.matches_created == 3
         await db.refresh(erp1)
         assert erp1.status == "RECONCILED"

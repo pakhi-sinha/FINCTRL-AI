@@ -9,6 +9,10 @@ class PolicyDecision:
         self.is_valid = is_valid
 
 def evaluate_policy(proposal: ProposedMatchSchema, evidence: EvidencePackage) -> PolicyDecision:
+    evidence_ids = proposal.supporting_evidence if proposal.supporting_evidence else []
+    if not evidence_ids and hasattr(proposal, "evidence_ids") and proposal.evidence_ids:
+        evidence_ids = proposal.evidence_ids
+
     # 1. Validation of Evidence IDs
     supplied_ids = set()
     for erp in evidence.erp_records:
@@ -18,46 +22,52 @@ def evaluate_policy(proposal: ProposedMatchSchema, evidence: EvidencePackage) ->
     for b in evidence.bank_records:
         supplied_ids.add(b["id"])
 
-    for eid in proposal.evidence_ids:
+    for eid in evidence_ids:
         if eid not in supplied_ids:
             return PolicyDecision("REJECTED", f"Hallucinated evidence ID: {eid}", False)
 
     # 2. Check Decision Type
-    if proposal.decision == "NO_MATCH":
-        return PolicyDecision("EXCEPTION", "AI determined NO_MATCH", True)
-    elif proposal.decision == "PROPOSE_EXCEPTION":
-        return PolicyDecision("EXCEPTION", "AI proposed an exception: " + str(proposal.reasoning), True)
+    if proposal.classification == "EXCEPTION" or getattr(proposal, "decision", "") in ["PROPOSE_EXCEPTION", "NO_MATCH"]:
+        return PolicyDecision("EXCEPTION", "AI proposed an exception or NO_MATCH", True)
+    elif proposal.classification == "UNRESOLVED":
+        return PolicyDecision("HUMAN_REVIEW_REQUIRED", "AI explicitly marked as UNRESOLVED", True)
 
     # 3. Confidence Thresholds
     if proposal.confidence < 0.75:
         return PolicyDecision("EXCEPTION", f"Confidence {proposal.confidence} < 0.75", True)
 
-    proposed_erp = [r for r in evidence.erp_records if r["id"] in proposal.evidence_ids]
-    proposed_rzp = [r for r in evidence.rzp_records if r["id"] in proposal.evidence_ids]
-    proposed_bank = [r for r in evidence.bank_records if r["id"] in proposal.evidence_ids]
+    proposed_erp = [r for r in evidence.erp_records if r["id"] in evidence_ids]
+    proposed_rzp = [r for r in evidence.rzp_records if r["id"] in evidence_ids]
+    proposed_bank = [r for r in evidence.bank_records if r["id"] in evidence_ids]
+
+    # Map classification to logic
+    match_type = getattr(proposal, "match_type", None)
 
     # Financial Safety Rules:
-    if proposal.match_type == "ONE_TO_ONE":
+    if match_type == "ONE_TO_ONE" or (proposal.classification == "MATCH" and len(proposed_erp) == 1 and len(proposed_rzp) == 1 and match_type not in ["FEE_DISCREPANCY", "PARTIAL"]):
         if len(proposed_erp) != 1 or len(proposed_rzp) != 1:
             return PolicyDecision("REJECTED", "ONE_TO_ONE requires exactly 1 ERP and 1 RZP", False)
 
         erp = proposed_erp[0]
         rzp = proposed_rzp[0]
 
-        amount_match = (erp["amount"] == rzp["gross_amount"])
-        ref_match = (erp["reference_id"] == rzp["order_receipt"])
+        # Handle Phase 3 vs Phase 4 dictionary keys seamlessly
+        rzp_amount = rzp.get("amount", rzp.get("gross_amount", 0))
+        rzp_ref = rzp.get("rzp_order_id", rzp.get("order_receipt", ""))
+
+        amount_match = (erp.get("amount", 0) == rzp_amount)
+        ref_match = (erp.get("reference_id", "") == rzp_ref)
 
         if not amount_match and not ref_match:
              return PolicyDecision("REJECTED", "Neither amount nor reference match.", False)
 
         if amount_match and not ref_match:
-            # Need another signal. Without full date parsing, reject for now.
             return PolicyDecision("REJECTED", "Amount-only match is forbidden.", False)
 
         if ref_match and not amount_match:
              return PolicyDecision("REJECTED", "Reference-only match is forbidden.", False)
 
-    elif proposal.match_type == "ONE_TO_MANY":
+    elif match_type == "ONE_TO_MANY":
         if len(proposed_erp) < 1 or len(proposed_rzp) < 1:
              return PolicyDecision("REJECTED", "ONE_TO_MANY requires multiple records.", False)
 
@@ -68,35 +78,36 @@ def evaluate_policy(proposal: ProposedMatchSchema, evidence: EvidencePackage) ->
                 if len(evidence_rzp_with_settlement) != len(proposed_rzp):
                     return PolicyDecision("REJECTED", "Incomplete 1:N group proposed.", False)
 
-    elif proposal.match_type == "FEE_DISCREPANCY":
+    elif match_type == "FEE_DISCREPANCY":
         if len(proposed_erp) != 1 or len(proposed_rzp) != 1:
             return PolicyDecision("REJECTED", "FEE_DISCREPANCY requires exactly 1 ERP and 1 RZP", False)
 
         erp = proposed_erp[0]
         rzp = proposed_rzp[0]
 
-        # Must have reference match
-        if erp["reference_id"] != rzp["order_receipt"]:
+        rzp_ref = rzp.get("rzp_order_id", rzp.get("order_receipt", ""))
+        if erp.get("reference_id") != rzp_ref:
             return PolicyDecision("REJECTED", "Reference must match for FEE_DISCREPANCY", False)
 
-        expected_net = erp["amount"]
-        calculated_net = rzp["gross_amount"] - rzp["fee"] - rzp["tax"]
-        if calculated_net != expected_net and not proposal.discrepancy:
+        expected_net = erp.get("amount", 0)
+        rzp_gross = rzp.get("amount", rzp.get("gross_amount", 0))
+        calculated_net = rzp_gross - rzp.get("fee", 0) - rzp.get("tax", 0)
+
+        has_discrepancy = getattr(proposal, "discrepancy", None) is not None
+        if calculated_net != expected_net and not has_discrepancy:
             return PolicyDecision("REJECTED", "Fee discrepancy not correctly accounted for.", False)
 
-    elif proposal.match_type == "PARTIAL":
+    elif match_type == "PARTIAL":
         return PolicyDecision("REJECTED", "PARTIAL matches cannot be auto-resolved currently.", False)
-    else:
-        return PolicyDecision("REJECTED", "Unknown match type.", False)
 
-    # Check timestamps roughly
-    for e in proposed_erp:
-        for r in proposed_rzp:
-            if "timestamp" in e and "timestamp" in r:
-                # Basic check, just verifying it exists for now.
-                pass
+    # Phase 4 strict requires_human_approval override
+    if proposal.requires_human_approval:
+        return PolicyDecision("HUMAN_REVIEW_REQUIRED", "AI explicitly requested human approval.", True)
 
     if proposal.confidence >= 0.95:
+        # Phase 4 recommendation respect
+        if proposal.recommended_action == "HUMAN_REVIEW_REQUIRED":
+            return PolicyDecision("HUMAN_REVIEW_REQUIRED", "High confidence but human review recommended.", True)
         return PolicyDecision("AUTO_RESOLVE", "Confidence >= 0.95 and safety checks passed.", True)
     else:
         return PolicyDecision("HUMAN_REVIEW_REQUIRED", f"Confidence {proposal.confidence} requires review.", True)
