@@ -153,7 +153,7 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
         linked_payments = [pm for pm in payments if pm.rzp_settlement_id == sm.rzp_settlement_id]
 
         if not linked_payments:
-            create_exception(db, "RZP", sm.id, "INCOMPLETE_PAYMENT_LINKAGE", "HIGH")
+            create_exception(db, "RZP", sm.id, "MISSING_PAYMENTS_FOR_SETTLEMENT", "HIGH")
             exceptions_created += 1
             continue
 

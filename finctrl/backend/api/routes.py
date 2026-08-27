@@ -60,9 +60,11 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
     if not event_id:
         raise HTTPException(status_code=400, detail="Missing event ID")
 
-    if settings.RAZORPAY_KEY_SECRET:
-        if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
-            raise HTTPException(status_code=400, detail="Invalid signature")
+    if not settings.RAZORPAY_KEY_SECRET:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         payload = json.loads(body_bytes)

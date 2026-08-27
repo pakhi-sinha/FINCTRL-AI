@@ -44,7 +44,7 @@ def evaluate_policy(proposal: ProposedMatchSchema, evidence: EvidencePackage) ->
     match_type = getattr(proposal, "match_type", None)
 
     # Financial Safety Rules:
-    if match_type == "ONE_TO_ONE" or (proposal.classification == "MATCH" and len(proposed_erp) == 1 and len(proposed_rzp) == 1 and match_type not in ["FEE_DISCREPANCY", "PARTIAL"]):
+    if match_type == "ONE_TO_ONE":
         if len(proposed_erp) != 1 or len(proposed_rzp) != 1:
             return PolicyDecision("REJECTED", "ONE_TO_ONE requires exactly 1 ERP and 1 RZP", False)
 

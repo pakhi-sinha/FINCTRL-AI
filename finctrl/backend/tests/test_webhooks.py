@@ -49,3 +49,9 @@ async def test_webhook_signature_validation():
         resp5 = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_123", "x-razorpay-signature": valid_sig})
         assert resp5.status_code == 200
         assert resp5.json() == {"status": "already_processed"}
+
+        # Test 6: Missing configuration secret -> fail closed
+        settings.RAZORPAY_KEY_SECRET = ""
+        resp6 = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_124", "x-razorpay-signature": valid_sig})
+        assert resp6.status_code == 500
+        assert "Webhook secret not configured" in resp6.json()["detail"]

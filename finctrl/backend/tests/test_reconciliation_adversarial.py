@@ -196,7 +196,7 @@ async def test_incomplete_payment_linkage():
         # 1 exception for missing payment linkages
         assert response.exceptions_created >= 1
 
-        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="INCOMPLETE_PAYMENT_LINKAGE"))
+        result = await db.execute(select(ExceptionModel).filter_by(anomaly_type="MISSING_PAYMENTS_FOR_SETTLEMENT"))
         exc = result.scalar_one_or_none()
         assert exc is not None
 
