@@ -5,6 +5,7 @@ from typing import List
 from datetime import datetime
 
 from finctrl.backend.database.database import get_db_session
+from finctrl.backend.api.auth import require_admin, require_read
 
 
 from finctrl.backend.database.models import (
@@ -87,79 +88,68 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
         payload_hash=payload_hash,
         raw_payload=payload
     )
-    db.add(event_model)
-    await db.flush()
 
     try:
-        if event_type == "order.paid":
-            order_data = payload.get("payload", {}).get("order", {}).get("entity", {})
-            if order_data:
-                om = RazorpayOrderModel(
-                    source_event_id=event_model.id,
-                    rzp_order_id=order_data.get("id"),
-                    receipt=order_data.get("receipt"),
-                    amount=order_data.get("amount", 0),
-                    amount_due=order_data.get("amount_due", 0),
-                    status=order_data.get("status"),
-                    created_at_ts=order_data.get("created_at", 0)
-                )
-                db.add(om)
-        elif event_type == "payment.captured":
-            payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
-            if payment_data:
-                pm = RazorpayPaymentModel(
-                    source_event_id=event_model.id,
-                    rzp_payment_id=payment_data.get("id"),
-                    rzp_order_id=payment_data.get("order_id"),
-                    amount=payment_data.get("amount", 0),
-                    currency=payment_data.get("currency", "INR"),
-                    status=payment_data.get("status"),
-                    created_at_ts=payment_data.get("created_at", 0)
-                )
-                db.add(pm)
-        elif event_type == "settlement.processed":
-            settlement_data = payload.get("payload", {}).get("settlement", {}).get("entity", {})
-            if settlement_data:
-                sm = RazorpaySettlementModel(
-                    source_event_id=event_model.id,
-                    rzp_settlement_id=settlement_data.get("id"),
-                    amount=settlement_data.get("amount", 0),
-                    status=settlement_data.get("status"),
-                    fees=settlement_data.get("fees", 0),
-                    tax=settlement_data.get("tax", 0),
-                    created_at_ts=settlement_data.get("created_at", 0)
-                )
-                db.add(sm)
-        elif event_type == "refund.processed":
-            refund_data = payload.get("payload", {}).get("refund", {}).get("entity", {})
-            if refund_data:
-                rm = RazorpayRefundModel(
-                    source_event_id=event_model.id,
-                    rzp_refund_id=refund_data.get("id"),
-                    rzp_payment_id=refund_data.get("payment_id"),
-                    amount=refund_data.get("amount", 0),
-                    currency=refund_data.get("currency", "INR"),
-                    status=refund_data.get("status"),
-                    receipt=refund_data.get("receipt"),
-                    created_at_ts=refund_data.get("created_at", 0)
-                )
-                db.add(rm)
-        event_model.processing_status = "PROCESSED"
-        event_model.processed_at = datetime.utcnow()
+        db.add(event_model)
+        await db.flush()
+    except Exception as e:
+        await db.rollback()
+        # Fallback query if duplicate creation
+        existing = await db.execute(select(FinancialEventModel).filter_by(provider="razorpay", provider_event_id=event_id))
+        if existing.scalar_one_or_none():
+            return {"status": "already_processed"}
+        raise HTTPException(status_code=500, detail="Database error on creation")
+
+    from finctrl.backend.api.webhook_processor import process_razorpay_event
+    success = await process_razorpay_event(db, event_model)
+
+    if success:
         await db.commit()
         return {"status": "ok", "event_id": str(event_model.id)}
-    except Exception as e:
-        event_model.processing_status = "FAILED"
-        event_model.error_message = str(e)
+    else:
         await db.commit()
         raise HTTPException(status_code=500, detail="Processing failed")
 
+@router.post("/webhooks/replay/{event_id}", dependencies=[Depends(require_admin)])
+async def replay_webhook(event_id: str, db: AsyncSession = Depends(get_db_session)):
+    # Replays a previously FAILED webhook
+    # Searching by provider_event_id since SQLite struggles with asynchronous UUID bindings
+    existing = await db.execute(select(FinancialEventModel).filter_by(provider_event_id=event_id))
+    event_model = existing.scalar_one_or_none()
+
+    if not event_model:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    if event_model.processing_status == "PROCESSED":
+        return {"status": "already_processed", "event_id": str(event_model.id)}
+
+    from finctrl.backend.api.webhook_processor import process_razorpay_event
+    success = await process_razorpay_event(db, event_model)
+
+    if success:
+        event_model.processing_status = "PROCESSED"
+        # Also log to AuditLogModel for auditability
+        from finctrl.backend.database.models import AuditLogModel
+        from datetime import timezone
+        audit = AuditLogModel(
+            entity_type="FINANCIAL_EVENT",
+            entity_id=event_model.id,
+            action="REPLAY_WEBHOOK_SUCCESS",
+            changes={"status": "PROCESSED"},
+            timestamp=datetime.now(timezone.utc)
+        )
+        db.add(audit)
+        await db.commit()
+        return {"status": "ok", "event_id": str(event_model.id)}
+    else:
+        await db.commit()
+        raise HTTPException(status_code=500, detail="Replay failed")
 
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():
     return {"status": "ok"}
 
-@router.post("/ingest/erp", response_model=BulkIngestResponse)
+@router.post("/ingest/erp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -202,7 +192,7 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/ingest/rzp", response_model=BulkIngestResponse)
+@router.post("/ingest/rzp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -275,7 +265,7 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/ingest/bank", response_model=BulkIngestResponse)
+@router.post("/ingest/bank", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -318,13 +308,13 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/reconciliation/run", response_model=RunReconciliationResponse)
+@router.post("/reconciliation/run", response_model=RunReconciliationResponse, dependencies=[Depends(require_admin)])
 async def trigger_reconciliation(db: AsyncSession = Depends(get_db_session)):
     stats = await run_reconciliation(db)
     return stats
 
 # Adding some basic retrieval endpoints for E2E tests and debugging
-@router.get("/matches", response_model=List[MatchResponse])
+@router.get("/matches", response_model=List[MatchResponse], dependencies=[Depends(require_read)])
 async def get_matches(db: AsyncSession = Depends(get_db_session)):
     # Needed to eagerly load evidence for the response
     from sqlalchemy.orm import selectinload
@@ -333,26 +323,26 @@ async def get_matches(db: AsyncSession = Depends(get_db_session)):
     )
     return result.scalars().all()
 
-@router.get("/candidates", response_model=List[CandidateResponse])
+@router.get("/candidates", response_model=List[CandidateResponse], dependencies=[Depends(require_read)])
 async def get_candidates(db: AsyncSession = Depends(get_db_session)):
     result = await db.execute(select(ReconciliationCandidateModel))
     return result.scalars().all()
 
 from finctrl.backend.engine.ai.agent import AIAgent
 
-@router.post("/ai/investigate/{candidate_id}", response_model=dict)
+@router.post("/ai/investigate/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_investigate_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "investigation_completed", "candidate_id": candidate_id}
 
-@router.post("/ai/process/{candidate_id}", response_model=dict)
+@router.post("/ai/process/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "processed", "candidate_id": candidate_id}
 
-@router.post("/ai/process-pending", response_model=dict)
+@router.post("/ai/process-pending", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_pending(db: AsyncSession = Depends(get_db_session)):
     query = select(ReconciliationCandidateModel).filter_by(status="PENDING_INVESTIGATION").limit(10)
     res = await db.execute(query)
@@ -366,7 +356,7 @@ async def ai_process_pending(db: AsyncSession = Depends(get_db_session)):
 
     return {"status": "processed_pending", "count": len(processed), "processed_ids": processed}
 
-@router.get("/ai/investigations/{candidate_id}", response_model=dict)
+@router.get("/ai/investigations/{candidate_id}", response_model=dict, dependencies=[Depends(require_read)])
 async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     from finctrl.backend.database.models import AuditLogModel
     query = select(AuditLogModel).filter(
@@ -388,7 +378,7 @@ async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(g
 
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 
-@router.get("/cash-position", response_model=CashPositionResponse)
+@router.get("/cash-position", response_model=CashPositionResponse, dependencies=[Depends(require_read)])
 async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
     # Realized cash: Sum of all RECONCILED Bank Records matching settlements
     # Ensure they are linked to a Razorpay Settlement in MatchEvidenceModel
@@ -451,7 +441,7 @@ async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from sqlalchemy import func
 
-@router.get("/metrics", response_model=MetricsResponse)
+@router.get("/metrics", response_model=MetricsResponse, dependencies=[Depends(require_read)])
 async def get_metrics(db: AsyncSession = Depends(get_db_session)):
 
     processed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "PROCESSED"))
@@ -484,3 +474,11 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
         candidates_created=candidates_created,
         processing_failures=processing_failures
     )
+
+@router.get("/ready")
+async def readiness_check(db: AsyncSession = Depends(get_db_session)):
+    try:
+        await db.execute(select(1))
+        return {"status": "ready"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="Database not ready")

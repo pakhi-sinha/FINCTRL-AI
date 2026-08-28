@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: finctrl
+      POSTGRES_PASSWORD: finctrl_password
+      POSTGRES_DB: finctrl_db
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finctrl -d finctrl_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    environment:
+      - APP_MODE=production
+      - DATABASE_URL=postgresql+asyncpg://finctrl:finctrl_password@db:5432/finctrl_db
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-dev_admin_key_999}
+      - READ_ONLY_API_KEY=${READ_ONLY_API_KEY:-dev_read_key_111}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-rzp_test_dev}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-rzp_secret_dev}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:-rzp_webhook_dev}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy

@@ -10,3 +10,4 @@ python-dateutil>=2.8.2
 openai>=1.0.0
 razorpay>=1.4.1
 pydantic-settings>=2.0.0
+alembic>=1.12.0

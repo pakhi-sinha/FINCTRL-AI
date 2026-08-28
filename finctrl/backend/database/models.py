@@ -1,9 +1,3 @@
-
-from sqlalchemy import JSON
-from sqlalchemy.dialects.postgresql import JSONB
-
-JSONType = JSON().with_variant(JSONB, "postgresql")
-
 from datetime import datetime
 from uuid import UUID, uuid4
 from typing import Any
@@ -16,11 +10,19 @@ Base = declarative_base()
 
 # If using SQLite for testing, we must fall back to generic JSON
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-is_sqlite = DATABASE_URL.startswith("sqlite")
+is_sqlite = DATABASE_URL and DATABASE_URL.startswith("sqlite")
+
+if is_sqlite:
+    from sqlalchemy.types import JSON as JSONType
+else:
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.types import JSON
+    JSONType = JSON().with_variant(JSONB, "postgresql")
 
 if is_sqlite:
     # Custom type decorator to handle UUID to str conversion for SQLite
     import sqlalchemy.types as types
+    import uuid
     class UUIDType(types.TypeDecorator):
         impl = types.String
         cache_ok = True
@@ -28,12 +30,16 @@ if is_sqlite:
         def process_bind_param(self, value, dialect):
             if value is None:
                 return value
+            if isinstance(value, uuid.UUID):
+                return str(value)
             return str(value)
 
         def process_result_value(self, value, dialect):
             if value is None:
                 return value
-            return UUID(value)
+            if isinstance(value, uuid.UUID):
+                return value
+            return uuid.UUID(value)
 
     def get_uuid():
         return str(uuid4())
