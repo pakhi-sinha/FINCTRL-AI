@@ -39,7 +39,9 @@ async def test_cash_position_ignores_unrelated_credits():
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            resp = await ac.get("/cash-position")
+            # Use read-only API key for GET request
+            headers = {"X-API-Key": "test_readonly_key"}
+            resp = await ac.get("/cash-position", headers=headers)
             assert resp.status_code == 200
             data = resp.json()
 

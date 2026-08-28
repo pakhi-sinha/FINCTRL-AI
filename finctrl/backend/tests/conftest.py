@@ -1,12 +1,13 @@
+import os
+# Set default API keys and DB URL for tests at import time before other modules load config
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["APP_MODE"] = "test"
+os.environ["ADMIN_API_KEY"] = "test_admin_key"
+os.environ["READ_ONLY_API_KEY"] = "test_readonly_key"
+
 import pytest
 import pytest_asyncio
-import os
 import asyncio
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_env():
-    # Set SQLite if not provided, just for tests
-    os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 @pytest_asyncio.fixture(autouse=True)
 async def db_setup(request):
