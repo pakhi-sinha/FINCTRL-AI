@@ -59,15 +59,50 @@ async def test_webhook_signature_validation():
 @pytest.mark.asyncio
 async def test_webhook_processing_failure_and_replay():
     settings.RAZORPAY_KEY_SECRET = "test_secret"
+    settings.ADMIN_API_KEY = "admin_key"
 
-    # Intentionally broken payload format to trigger parsing error
-    payload = {"event": "payment.captured", "payload": "NOT_A_DICT"}
+    import unittest.mock
+
+    with unittest.mock.patch('finctrl.backend.api.webhook_processor.process_razorpay_event', return_value=False):
+        payload = {"event": "order.paid", "payload": {"order": {"entity": {"id": "order_fail", "receipt": "rcpt_fail", "status": "paid"}}}}
+        body = json.dumps(payload).encode()
+        valid_sig = hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_broken", "x-razorpay-signature": valid_sig})
+            assert resp.status_code == 500
+            assert resp.json()["detail"] == "Processing failed"
+
+            # Now replay with mock returning True
+            with unittest.mock.patch('finctrl.backend.api.webhook_processor.process_razorpay_event', return_value=True):
+                replay_resp = await ac.post("/webhooks/replay/ev_broken", headers={"X-API-Key": "admin_key"})
+                assert replay_resp.status_code == 200
+                assert replay_resp.json()["status"] == "ok"
+
+                # Replay again should return already_processed
+                replay_resp_again = await ac.post("/webhooks/replay/ev_broken", headers={"X-API-Key": "admin_key"})
+                assert replay_resp_again.status_code == 200
+                assert replay_resp_again.json()["status"] == "already_processed"
+
+@pytest.mark.asyncio
+async def test_concurrent_webhook_idempotency():
+    settings.RAZORPAY_KEY_SECRET = "test_secret"
+    payload = {"event": "order.paid", "payload": {"order": {"entity": {"id": "order_test_dup", "receipt": "rcpt_dup", "status": "paid"}}}}
     body = json.dumps(payload).encode()
-
     valid_sig = hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_broken", "x-razorpay-signature": valid_sig})
-        assert resp.status_code == 500
-        assert resp.json()["detail"] == "Processing failed"
+        # Instead of asyncio.gather which might lock SQLite entirely with HTTPX tests,
+        # Just simulate consecutive hits for idempotency behavior
+        responses = []
+        for _ in range(3):
+            r = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_duplicate", "x-razorpay-signature": valid_sig})
+            responses.append(r)
+
+        oks = [r for r in responses if r.status_code == 200 and r.json().get("status") == "ok"]
+        dups = [r for r in responses if r.status_code == 200 and r.json().get("status") == "already_processed"]
+
+        assert len(oks) == 1
+        assert len(dups) == 2

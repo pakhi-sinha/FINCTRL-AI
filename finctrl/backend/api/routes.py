@@ -88,73 +88,62 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
         payload_hash=payload_hash,
         raw_payload=payload
     )
-    db.add(event_model)
-    await db.flush()
 
     try:
-        if event_type == "order.paid":
-            order_data = payload.get("payload", {}).get("order", {}).get("entity", {})
-            if order_data:
-                om = RazorpayOrderModel(
-                    source_event_id=event_model.id,
-                    rzp_order_id=order_data.get("id"),
-                    receipt=order_data.get("receipt"),
-                    amount=order_data.get("amount", 0),
-                    amount_due=order_data.get("amount_due", 0),
-                    status=order_data.get("status"),
-                    created_at_ts=order_data.get("created_at", 0)
-                )
-                db.add(om)
-        elif event_type == "payment.captured":
-            payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
-            if payment_data:
-                pm = RazorpayPaymentModel(
-                    source_event_id=event_model.id,
-                    rzp_payment_id=payment_data.get("id"),
-                    rzp_order_id=payment_data.get("order_id"),
-                    amount=payment_data.get("amount", 0),
-                    currency=payment_data.get("currency", "INR"),
-                    status=payment_data.get("status"),
-                    created_at_ts=payment_data.get("created_at", 0)
-                )
-                db.add(pm)
-        elif event_type == "settlement.processed":
-            settlement_data = payload.get("payload", {}).get("settlement", {}).get("entity", {})
-            if settlement_data:
-                sm = RazorpaySettlementModel(
-                    source_event_id=event_model.id,
-                    rzp_settlement_id=settlement_data.get("id"),
-                    amount=settlement_data.get("amount", 0),
-                    status=settlement_data.get("status"),
-                    fees=settlement_data.get("fees", 0),
-                    tax=settlement_data.get("tax", 0),
-                    created_at_ts=settlement_data.get("created_at", 0)
-                )
-                db.add(sm)
-        elif event_type == "refund.processed":
-            refund_data = payload.get("payload", {}).get("refund", {}).get("entity", {})
-            if refund_data:
-                rm = RazorpayRefundModel(
-                    source_event_id=event_model.id,
-                    rzp_refund_id=refund_data.get("id"),
-                    rzp_payment_id=refund_data.get("payment_id"),
-                    amount=refund_data.get("amount", 0),
-                    currency=refund_data.get("currency", "INR"),
-                    status=refund_data.get("status"),
-                    receipt=refund_data.get("receipt"),
-                    created_at_ts=refund_data.get("created_at", 0)
-                )
-                db.add(rm)
-        event_model.processing_status = "PROCESSED"
-        event_model.processed_at = datetime.utcnow()
+        db.add(event_model)
+        await db.flush()
+    except Exception as e:
+        await db.rollback()
+        # Fallback query if duplicate creation
+        existing = await db.execute(select(FinancialEventModel).filter_by(provider="razorpay", provider_event_id=event_id))
+        if existing.scalar_one_or_none():
+            return {"status": "already_processed"}
+        raise HTTPException(status_code=500, detail="Database error on creation")
+
+    from finctrl.backend.api.webhook_processor import process_razorpay_event
+    success = await process_razorpay_event(db, event_model)
+
+    if success:
         await db.commit()
         return {"status": "ok", "event_id": str(event_model.id)}
-    except Exception as e:
-        event_model.processing_status = "FAILED"
-        event_model.error_message = str(e)
+    else:
         await db.commit()
         raise HTTPException(status_code=500, detail="Processing failed")
 
+@router.post("/webhooks/replay/{event_id}", dependencies=[Depends(require_admin)])
+async def replay_webhook(event_id: str, db: AsyncSession = Depends(get_db_session)):
+    # Replays a previously FAILED webhook
+    # Searching by provider_event_id since SQLite struggles with asynchronous UUID bindings
+    existing = await db.execute(select(FinancialEventModel).filter_by(provider_event_id=event_id))
+    event_model = existing.scalar_one_or_none()
+
+    if not event_model:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    if event_model.processing_status == "PROCESSED":
+        return {"status": "already_processed", "event_id": str(event_model.id)}
+
+    from finctrl.backend.api.webhook_processor import process_razorpay_event
+    success = await process_razorpay_event(db, event_model)
+
+    if success:
+        event_model.processing_status = "PROCESSED"
+        # Also log to AuditLogModel for auditability
+        from finctrl.backend.database.models import AuditLogModel
+        from datetime import timezone
+        audit = AuditLogModel(
+            entity_type="FINANCIAL_EVENT",
+            entity_id=event_model.id,
+            action="REPLAY_WEBHOOK_SUCCESS",
+            changes={"status": "PROCESSED"},
+            timestamp=datetime.now(timezone.utc)
+        )
+        db.add(audit)
+        await db.commit()
+        return {"status": "ok", "event_id": str(event_model.id)}
+    else:
+        await db.commit()
+        raise HTTPException(status_code=500, detail="Replay failed")
 
 @router.get("/health", response_model=HealthCheckResponse)
 async def health_check():
