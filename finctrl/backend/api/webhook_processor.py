@@ -78,14 +78,27 @@ async def process_razorpay_event(db: AsyncSession, event_model: FinancialEventMo
         event_model.processing_status = "PROCESSED"
         # DeprecationWarning fix: Use timezone-aware datetime
         from datetime import timezone
+        # We need to flush the DB session here to catch IntegrityErrors inside the processor
+        await db.flush()
+
+        event_model.processing_status = "PROCESSED"
+        # DeprecationWarning fix: Use timezone-aware datetime
+        from datetime import timezone
         event_model.processed_at = datetime.now(timezone.utc)
         return True
     except IntegrityError as e:
+        # We need to rollback the session to clear the failed insert
+        # so that we can still persist the event_model state update
+        await db.rollback()
+        # Re-add event_model to session because rollback expunges it or resets state
+        db.add(event_model)
         # Handles concurrent identical webhook deliveries cleanly
         event_model.processing_status = "FAILED"
         event_model.error_message = f"IntegrityError: {str(e)}"
         return False
     except Exception as e:
+        await db.rollback()
+        db.add(event_model)
         event_model.processing_status = "FAILED"
         event_model.error_message = str(e)
         return False
