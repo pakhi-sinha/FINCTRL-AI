@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: finctrl
+      POSTGRES_PASSWORD: finctrl_dev_password
+      POSTGRES_DB: finctrl
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finctrl"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Application
+      APP_MODE: production
+
+      # Database
+      DATABASE_URL: postgresql+asyncpg://finctrl:finctrl_dev_password@postgres:5432/finctrl
+
+      # API Security
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-admin_secret_key_change_me}
+      READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:-readonly_secret_key_change_me}
+
+      # Razorpay
+      RAZORPAY_MODE: ${RAZORPAY_MODE:-test}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+
+      # AI Provider
+      AI_PROVIDER: ${AI_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
