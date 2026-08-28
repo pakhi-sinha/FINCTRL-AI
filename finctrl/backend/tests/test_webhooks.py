@@ -57,7 +57,7 @@ async def test_webhook_signature_validation():
         assert "Webhook secret not configured" in resp6.json()["detail"]
 
 @pytest.mark.asyncio
-async def test_webhook_processing_failure():
+async def test_webhook_processing_failure_and_replay():
     settings.RAZORPAY_KEY_SECRET = "test_secret"
 
     # Intentionally broken payload format to trigger parsing error

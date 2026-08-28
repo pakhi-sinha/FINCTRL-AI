@@ -5,6 +5,7 @@ from typing import List
 from datetime import datetime
 
 from finctrl.backend.database.database import get_db_session
+from finctrl.backend.api.auth import require_admin, require_read
 
 
 from finctrl.backend.database.models import (
@@ -159,7 +160,7 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
 async def health_check():
     return {"status": "ok"}
 
-@router.post("/ingest/erp", response_model=BulkIngestResponse)
+@router.post("/ingest/erp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -202,7 +203,7 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/ingest/rzp", response_model=BulkIngestResponse)
+@router.post("/ingest/rzp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -275,7 +276,7 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/ingest/bank", response_model=BulkIngestResponse)
+@router.post("/ingest/bank", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_db_session)):
     received = len(payload.records)
     inserted = 0
@@ -318,13 +319,13 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
-@router.post("/reconciliation/run", response_model=RunReconciliationResponse)
+@router.post("/reconciliation/run", response_model=RunReconciliationResponse, dependencies=[Depends(require_admin)])
 async def trigger_reconciliation(db: AsyncSession = Depends(get_db_session)):
     stats = await run_reconciliation(db)
     return stats
 
 # Adding some basic retrieval endpoints for E2E tests and debugging
-@router.get("/matches", response_model=List[MatchResponse])
+@router.get("/matches", response_model=List[MatchResponse], dependencies=[Depends(require_read)])
 async def get_matches(db: AsyncSession = Depends(get_db_session)):
     # Needed to eagerly load evidence for the response
     from sqlalchemy.orm import selectinload
@@ -333,26 +334,26 @@ async def get_matches(db: AsyncSession = Depends(get_db_session)):
     )
     return result.scalars().all()
 
-@router.get("/candidates", response_model=List[CandidateResponse])
+@router.get("/candidates", response_model=List[CandidateResponse], dependencies=[Depends(require_read)])
 async def get_candidates(db: AsyncSession = Depends(get_db_session)):
     result = await db.execute(select(ReconciliationCandidateModel))
     return result.scalars().all()
 
 from finctrl.backend.engine.ai.agent import AIAgent
 
-@router.post("/ai/investigate/{candidate_id}", response_model=dict)
+@router.post("/ai/investigate/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_investigate_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "investigation_completed", "candidate_id": candidate_id}
 
-@router.post("/ai/process/{candidate_id}", response_model=dict)
+@router.post("/ai/process/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "processed", "candidate_id": candidate_id}
 
-@router.post("/ai/process-pending", response_model=dict)
+@router.post("/ai/process-pending", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_pending(db: AsyncSession = Depends(get_db_session)):
     query = select(ReconciliationCandidateModel).filter_by(status="PENDING_INVESTIGATION").limit(10)
     res = await db.execute(query)
@@ -366,7 +367,7 @@ async def ai_process_pending(db: AsyncSession = Depends(get_db_session)):
 
     return {"status": "processed_pending", "count": len(processed), "processed_ids": processed}
 
-@router.get("/ai/investigations/{candidate_id}", response_model=dict)
+@router.get("/ai/investigations/{candidate_id}", response_model=dict, dependencies=[Depends(require_read)])
 async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
     from finctrl.backend.database.models import AuditLogModel
     query = select(AuditLogModel).filter(
@@ -388,7 +389,7 @@ async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(g
 
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 
-@router.get("/cash-position", response_model=CashPositionResponse)
+@router.get("/cash-position", response_model=CashPositionResponse, dependencies=[Depends(require_read)])
 async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
     # Realized cash: Sum of all RECONCILED Bank Records matching settlements
     # Ensure they are linked to a Razorpay Settlement in MatchEvidenceModel
@@ -451,7 +452,7 @@ async def get_cash_position(db: AsyncSession = Depends(get_db_session)):
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from sqlalchemy import func
 
-@router.get("/metrics", response_model=MetricsResponse)
+@router.get("/metrics", response_model=MetricsResponse, dependencies=[Depends(require_read)])
 async def get_metrics(db: AsyncSession = Depends(get_db_session)):
 
     processed_count = await db.execute(select(func.count(FinancialEventModel.id)).filter(FinancialEventModel.processing_status == "PROCESSED"))
@@ -484,3 +485,11 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
         candidates_created=candidates_created,
         processing_failures=processing_failures
     )
+
+@router.get("/ready")
+async def readiness_check(db: AsyncSession = Depends(get_db_session)):
+    try:
+        await db.execute(select(1))
+        return {"status": "ready"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="Database not ready")
