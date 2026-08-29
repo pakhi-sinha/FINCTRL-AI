@@ -45,6 +45,7 @@ class MatchEvidenceResponse(BaseModel):
     id: UUID
     record_type: str
     record_id: UUID
+    source_id: Optional[str] = None
 
 class MatchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

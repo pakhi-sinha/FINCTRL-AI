@@ -16,6 +16,7 @@ from finctrl.backend.config import settings
 
 from finctrl.backend.database.models import (
     FinancialEventModel,
+    financial_event_id,
     ERPRecordModel,
     RazorpayOrderModel,
     RazorpayPaymentModel,
@@ -40,6 +41,7 @@ from finctrl.backend.api.schemas import (
     RunReconciliationResponse
 )
 from finctrl.backend.reconciliation.engine import run_reconciliation
+from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from finctrl.backend.engine.ai.agent import AIAgent
@@ -97,7 +99,16 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
     lock = _webhook_locks.setdefault(event_id, asyncio.Lock())
     try:
         async with lock:
-            return await _process_razorpay_webhook(db, body_bytes, payload, event_id)
+            already_processed, ledger_id, error = await WebhookProcessor(db).process_razorpay_webhook(
+                body_bytes, signature, event_id
+            )
+            if error:
+                status_code = 409 if error == "Event ID payload conflict" else 500
+                detail = error if status_code == 409 else "Processing failed"
+                raise HTTPException(status_code=status_code, detail=detail)
+            if already_processed:
+                return {"status": "already_processed"}
+            return {"status": "ok", "event_id": ledger_id}
     finally:
         if not lock.locked():
             _webhook_locks.pop(event_id, None)
@@ -114,6 +125,7 @@ async def _process_razorpay_webhook(
     event_type = payload.get("event", "unknown")
 
     event_model = FinancialEventModel(
+        id=financial_event_id("razorpay", event_id),
         provider="razorpay",
         provider_event_id=event_id,
         event_type=event_type,
@@ -216,6 +228,7 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
         payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
 
         event_model = FinancialEventModel(
+            id=financial_event_id("erp", str(record.id)),
             provider="erp",
             provider_event_id=str(record.id),
             event_type="erp.upload",
@@ -260,6 +273,7 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
         payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
 
         event_model = FinancialEventModel(
+            id=financial_event_id("razorpay_legacy", str(record.id)),
             provider="razorpay_legacy",
             provider_event_id=str(record.id),
             event_type="legacy.upload",
@@ -334,6 +348,7 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
         payload_hash = hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest()
 
         event_model = FinancialEventModel(
+            id=financial_event_id("bank", str(record.id)),
             provider="bank",
             provider_event_id=str(record.id),
             event_type="bank.upload",

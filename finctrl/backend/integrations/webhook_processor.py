@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from finctrl.backend.database.models import (
     FinancialEventModel,
+    financial_event_id,
     RazorpayOrderModel,
     RazorpayPaymentModel,
     RazorpaySettlementModel,
@@ -43,7 +44,9 @@ class WebhookProcessor:
 
         Returns: (already_processed, event_uuid, error_message)
         """
-        # 1. Check if already processed (idempotency check)
+        payload_hash = hashlib.sha256(body_bytes).hexdigest()
+
+        # 1. Check the durable ledger before attempting ingestion.
         existing = await self.db.execute(
             select(FinancialEventModel).filter_by(
                 provider="razorpay",
@@ -53,6 +56,11 @@ class WebhookProcessor:
         existing_event = existing.scalar_one_or_none()
 
         if existing_event:
+            if existing_event.payload_hash != payload_hash:
+                return False, str(existing_event.id), "Event ID payload conflict"
+            if existing_event.processing_status == "FAILED":
+                success, replayed_id, error = await self.replay_event(str(existing_event.id))
+                return False, replayed_id, error if not success else None
             logger.info(
                 f"Webhook already processed: event_id={event_id}, status={existing_event.processing_status}",
                 extra={"event_id": event_id, "status": existing_event.processing_status}
@@ -89,6 +97,7 @@ class WebhookProcessor:
 
         # Create event model
         event_model = FinancialEventModel(
+            id=financial_event_id("razorpay", event_id),
             provider="razorpay",
             provider_event_id=event_id,
             event_type=event_type,
@@ -155,6 +164,7 @@ class WebhookProcessor:
 
             # Create failed event
             failed_event = FinancialEventModel(
+                id=financial_event_id("razorpay", event_id),
                 provider="razorpay",
                 provider_event_id=event_id,
                 event_type=event_type,
@@ -273,7 +283,8 @@ class WebhookProcessor:
         raw_payload = event.raw_payload
 
         # Increment attempt count
-        event.attempt_count += 1
+        next_attempt = event.attempt_count + 1
+        event.attempt_count = next_attempt
         event.processing_status = "RETRYING"
         event.error_message = None
 
@@ -321,6 +332,7 @@ class WebhookProcessor:
             if event is None:
                 return False, str(persisted_event_id), str(e)
             event.processing_status = "FAILED"
+            event.attempt_count = next_attempt
             event.error_message = str(e)
             await self.db.commit()
 
