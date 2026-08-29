@@ -3,6 +3,7 @@ from sqlalchemy import select
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple
 from uuid import UUID
+import hashlib
 
 from finctrl.backend.database.models import (
     ERPRecordModel,
@@ -42,11 +43,29 @@ async def get_unresolved_bank(db: AsyncSession) -> List[BankRecordModel]:
     result = await db.execute(select(BankRecordModel).filter(BankRecordModel.status != "RECONCILED"))
     return list(result.scalars().all())
 
-def create_match_evidence(db: AsyncSession, match: ReconciliationMatchModel, record_type: str, record_id: UUID):
+def _source_id(record) -> str:
+    for field in (
+        "reference_id", "rzp_refund_id", "rzp_payment_id",
+        "rzp_settlement_id", "rzp_order_id", "transaction_ref",
+    ):
+        value = getattr(record, field, None)
+        if value:
+            return str(value)
+    return str(record.id)
+
+
+def _match_key(match_type: str, evidence: List[Tuple[str, Any]]) -> str:
+    identities = sorted(f"{kind}:{_source_id(record)}" for kind, record in evidence)
+    canonical = "|".join([match_type, *identities])
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def create_match_evidence(db: AsyncSession, match: ReconciliationMatchModel, record_type: str, record):
     evidence = MatchEvidenceModel(
         match_id=match.id,
         record_type=record_type,
-        record_id=record_id
+        record_id=record.id,
+        source_id=_source_id(record),
     )
     db.add(evidence)
 
@@ -101,13 +120,16 @@ async def stage_a_exact_match(db: AsyncSession) -> int:
                         break
 
                 if bank_match:
-                    match = ReconciliationMatchModel(match_type="EXACT_1_1")
+                    evidence_records = [("ERP", erp), ("RZP", pm), ("BANK", bank_match)]
+                    match = ReconciliationMatchModel(
+                        match_type="EXACT_1_1",
+                        match_key=_match_key("EXACT_1_1", evidence_records),
+                    )
                     db.add(match)
                     await db.flush()
 
-                    create_match_evidence(db, match, "ERP", erp.id)
-                    create_match_evidence(db, match, "RZP", pm.id)
-                    create_match_evidence(db, match, "BANK", bank_match.id)
+                    for record_type, record in evidence_records:
+                        create_match_evidence(db, match, record_type, record)
 
                     await _mark_reconciled(db, ERPRecordModel, erp.id)
                     await _mark_reconciled(db, RazorpayPaymentModel, pm.id, True)
@@ -206,23 +228,34 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
             if bank.amount == actual_settlement_amount and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
                 bank_matched = True
 
-                match = ReconciliationMatchModel(match_type="CONSOLIDATED")
+                matched_erps = [
+                    erp_by_ref[p.rzp_order_id]
+                    for p in linked_payments
+                    if p.rzp_order_id and p.rzp_order_id in erp_by_ref
+                ]
+                evidence_records = [("RZP", sm), ("BANK", bank)]
+                evidence_records.extend(("RZP", p) for p in linked_payments)
+                evidence_records.extend(("ERP", e) for e in matched_erps)
+                match = ReconciliationMatchModel(
+                    match_type="CONSOLIDATED",
+                    match_key=_match_key("CONSOLIDATED", evidence_records),
+                )
                 db.add(match)
                 await db.flush()
 
-                create_match_evidence(db, match, "RZP", sm.id)
-                create_match_evidence(db, match, "BANK", bank.id)
+                create_match_evidence(db, match, "RZP", sm)
+                create_match_evidence(db, match, "BANK", bank)
                 await _mark_reconciled(db, RazorpaySettlementModel, sm.id, True)
                 await _mark_reconciled(db, BankRecordModel, bank.id)
 
                 for p in linked_payments:
-                    create_match_evidence(db, match, "RZP", p.id)
+                    create_match_evidence(db, match, "RZP", p)
                     await _mark_reconciled(db, RazorpayPaymentModel, p.id, True)
 
                     # Find ERP
                     if p.rzp_order_id and p.rzp_order_id in erp_by_ref:
                         e = erp_by_ref[p.rzp_order_id]
-                        create_match_evidence(db, match, "ERP", e.id)
+                        create_match_evidence(db, match, "ERP", e)
                         await _mark_reconciled(db, ERPRecordModel, e.id)
 
                 matches_created += 1
@@ -294,11 +327,15 @@ async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, in
                 continue
 
             # If all good, match
-            match = ReconciliationMatchModel(match_type="REFUND_MATCH")
+            evidence_records = [("RZP", rm), ("RZP", pm)]
+            match = ReconciliationMatchModel(
+                match_type="REFUND_MATCH",
+                match_key=_match_key("REFUND_MATCH", evidence_records),
+            )
             db.add(match)
             await db.flush()
-            create_match_evidence(db, match, "RZP", rm.id)
-            create_match_evidence(db, match, "RZP", pm.id)
+            create_match_evidence(db, match, "RZP", rm)
+            create_match_evidence(db, match, "RZP", pm)
             await _mark_reconciled(db, RazorpayRefundModel, rm.id, True)
             matches_created += 1
 

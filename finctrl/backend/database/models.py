@@ -5,11 +5,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from typing import Any
 import os
 
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, event, inspect
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -50,6 +50,12 @@ else:
         return Column(UUIDType(as_uuid=True), *args, **kwargs)
 
 
+def financial_event_id(provider: str, provider_event_id: str):
+    """Return the stable ledger identity for a provider event."""
+    value = uuid5(NAMESPACE_URL, f"finctrl:financial-event:{provider.lower()}:{provider_event_id}")
+    return str(value) if is_sqlite else value
+
+
 class FinancialEventModel(Base):
     __tablename__ = "financial_events"
 
@@ -66,6 +72,19 @@ class FinancialEventModel(Base):
     error_message = Column(Text, nullable=True)
     schema_version = Column(String, nullable=False, default="1.0")
     __table_args__ = (UniqueConstraint('provider', 'provider_event_id', name='uix_provider_event_id'),)
+
+
+@event.listens_for(FinancialEventModel, "before_update")
+def _prevent_financial_event_mutation(mapper, connection, target):
+    """Ledger source facts are immutable; only processing state may change."""
+    state = inspect(target)
+    immutable_fields = (
+        "id", "provider", "provider_event_id", "event_type", "payload_hash",
+        "raw_payload", "received_at", "schema_version",
+    )
+    changed = [name for name in immutable_fields if state.attrs[name].history.has_changes()]
+    if changed:
+        raise ValueError(f"Financial event fields are immutable: {', '.join(changed)}")
 
 class ERPRecordModel(Base):
     __tablename__ = "erp_records"
@@ -175,6 +194,7 @@ class ReconciliationMatchModel(Base):
     __tablename__ = "reconciliation_matches"
 
     id = _uuid_col(primary_key=True, default=get_uuid)
+    match_key = Column(String, nullable=True, unique=True)
     match_type = Column(String, nullable=False) # e.g. "EXACT_1_1", "CONSOLIDATED"
     status = Column(String, nullable=False, default="RESOLVED")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -189,8 +209,12 @@ class MatchEvidenceModel(Base):
     match_id = _uuid_col(ForeignKey("reconciliation_matches.id"), nullable=False)
     record_type = Column(String, nullable=False) # "ERP", "RZP", "BANK"
     record_id = _uuid_col(nullable=False)
+    source_id = Column(String, nullable=True)
 
     match = relationship("ReconciliationMatchModel", back_populates="evidence")
+    __table_args__ = (
+        UniqueConstraint('match_id', 'record_type', 'record_id', name='uix_match_evidence_record'),
+    )
 
 class ReconciliationCandidateModel(Base):
     __tablename__ = "reconciliation_candidates"
