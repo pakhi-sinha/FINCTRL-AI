@@ -27,6 +27,8 @@ from finctrl.backend.database.models import (
     MatchEvidenceModel,
     ReconciliationCandidateModel,
     ExceptionModel,
+    ReconciliationExceptionModel,
+    ExceptionEvidenceModel,
     AuditLogModel
 )
 from finctrl.backend.api.schemas import (
@@ -38,9 +40,12 @@ from finctrl.backend.api.schemas import (
     WebhookEventPayload,
     MatchResponse,
     CandidateResponse,
-    RunReconciliationResponse
+    RunReconciliationResponse,
+    ReconciliationExceptionResponse,
+    ExceptionResolutionRequest,
 )
 from finctrl.backend.reconciliation.engine import run_reconciliation
+from finctrl.backend.reconciliation.workbench import transition_exception
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 from finctrl.backend.api.metrics_schema import MetricsResponse
@@ -396,6 +401,132 @@ async def get_matches(db: AsyncSession = Depends(get_db_session)):
 async def get_candidates(db: AsyncSession = Depends(get_db_session)):
     result = await db.execute(select(ReconciliationCandidateModel))
     return result.scalars().all()
+
+
+async def _get_exception_or_404(db: AsyncSession, exception_id: str):
+    try:
+        parsed_id = UUID(exception_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Exception not found")
+    exception = await db.scalar(
+        select(ReconciliationExceptionModel)
+        .where(ReconciliationExceptionModel.id == parsed_id)
+        .options(
+            selectinload(ReconciliationExceptionModel.evidence),
+            selectinload(ReconciliationExceptionModel.audit_entries),
+        )
+    )
+    if exception is None:
+        raise HTTPException(status_code=404, detail="Exception not found")
+    return exception
+
+
+@router.get("/exceptions", response_model=List[ReconciliationExceptionResponse], dependencies=[Depends(require_read_only)])
+async def get_reconciliation_exceptions(db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(
+        select(ReconciliationExceptionModel)
+        .options(
+            selectinload(ReconciliationExceptionModel.evidence),
+            selectinload(ReconciliationExceptionModel.audit_entries),
+        )
+        .order_by(ReconciliationExceptionModel.created_at, ReconciliationExceptionModel.exception_key)
+    )
+    return result.scalars().all()
+
+
+@router.get("/exceptions/{exception_id}", response_model=ReconciliationExceptionResponse, dependencies=[Depends(require_read_only)])
+async def get_reconciliation_exception(exception_id: str, db: AsyncSession = Depends(get_db_session)):
+    return await _get_exception_or_404(db, exception_id)
+
+
+@router.get("/exceptions/{exception_id}/candidates", response_model=List[CandidateResponse], dependencies=[Depends(require_read_only)])
+async def get_exception_candidates(exception_id: str, db: AsyncSession = Depends(get_db_session)):
+    exception = await _get_exception_or_404(db, exception_id)
+    candidate_ids = [item.record_id for item in exception.evidence if item.record_type == "RECONCILIATION_CANDIDATE"]
+    if not candidate_ids:
+        return []
+    return (await db.scalars(select(ReconciliationCandidateModel).where(
+        ReconciliationCandidateModel.id.in_(candidate_ids)
+    ))).all()
+
+
+@router.get("/exceptions/{exception_id}/evidence", response_model=dict, dependencies=[Depends(require_read_only)])
+async def get_exception_evidence(exception_id: str, db: AsyncSession = Depends(get_db_session)):
+    exception = await _get_exception_or_404(db, exception_id)
+    present = {item.record_type for item in exception.evidence}
+    expected = {"ERP", "RZP", "BANK"}
+    facts = []
+    for item in exception.evidence:
+        record = None
+        if item.record_type == "ERP":
+            record = await db.get(ERPRecordModel, item.record_id)
+        elif item.record_type == "BANK":
+            record = await db.get(BankRecordModel, item.record_id)
+        elif item.record_type == "FINANCIAL_EVENT":
+            record = await db.get(FinancialEventModel, item.record_id)
+        elif item.record_type == "RECONCILIATION_MATCH":
+            record = await db.get(ReconciliationMatchModel, item.record_id)
+        elif item.record_type == "RECONCILIATION_CANDIDATE":
+            record = await db.get(ReconciliationCandidateModel, item.record_id)
+        elif item.record_type == "RZP":
+            for model in (RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel, RazorpayOrderModel):
+                record = await db.get(model, item.record_id)
+                if record is not None:
+                    break
+        if record is None:
+            continue
+        fact = {"record_type": item.record_type, "source_id": item.source_id}
+        for field in (
+            "amount", "currency", "timestamp", "created_at_ts", "reference_id",
+            "transaction_ref", "rzp_payment_id", "rzp_order_id", "rzp_settlement_id",
+            "rzp_refund_id", "provider", "provider_event_id", "candidate_key", "score",
+            "match_key", "evidence_payload",
+        ):
+            value = getattr(record, field, None)
+            if value is not None:
+                fact[field] = value.isoformat() if isinstance(value, datetime) else value
+        facts.append(fact)
+    return {
+        "exception_id": str(exception.id),
+        "exception_key": exception.exception_key,
+        "exception_type": exception.exception_type,
+        "reason": exception.description,
+        "evidence": [
+            {"record_type": item.record_type, "record_id": str(item.record_id), "source_id": item.source_id}
+            for item in exception.evidence
+        ],
+        "facts": facts,
+        "missing_sources": sorted(expected - present),
+    }
+
+
+async def _transition_exception_endpoint(exception_id, request, new_status, actor, db):
+    exception = await _get_exception_or_404(db, exception_id)
+    try:
+        await transition_exception(
+            db, exception, new_status, actor,
+            request.resolution_type if request else None,
+            request.resolution_note if request else None,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    await db.commit()
+    return await _get_exception_or_404(db, exception_id)
+
+
+@router.post("/exceptions/{exception_id}/investigate", response_model=ReconciliationExceptionResponse)
+async def investigate_exception(exception_id: str, db: AsyncSession = Depends(get_db_session), actor: str = Depends(require_admin)):
+    return await _transition_exception_endpoint(exception_id, None, "INVESTIGATING", actor, db)
+
+
+@router.post("/exceptions/{exception_id}/resolve", response_model=ReconciliationExceptionResponse)
+async def resolve_exception(exception_id: str, request: ExceptionResolutionRequest, db: AsyncSession = Depends(get_db_session), actor: str = Depends(require_admin)):
+    return await _transition_exception_endpoint(exception_id, request, "RESOLVED", actor, db)
+
+
+@router.post("/exceptions/{exception_id}/dismiss", response_model=ReconciliationExceptionResponse)
+async def dismiss_exception(exception_id: str, request: ExceptionResolutionRequest, db: AsyncSession = Depends(get_db_session), actor: str = Depends(require_admin)):
+    return await _transition_exception_endpoint(exception_id, request, "DISMISSED", actor, db)
 
 
 @router.get("/cash-position", response_model=CashPositionResponse, dependencies=[Depends(require_read_only)])

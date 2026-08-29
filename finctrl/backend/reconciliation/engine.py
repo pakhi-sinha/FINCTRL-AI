@@ -18,6 +18,12 @@ from finctrl.backend.database.models import (
     ExceptionModel
 )
 from finctrl.backend.api.schemas import RunReconciliationResponse
+from finctrl.backend.reconciliation.workbench import (
+    candidate_signals,
+    deterministic_key,
+    generate_candidates as generate_workbench_candidates,
+    generate_exceptions,
+)
 
 async def get_unresolved_erp(db: AsyncSession) -> List[ERPRecordModel]:
     result = await db.execute(select(ERPRecordModel).filter(ERPRecordModel.status != "RECONCILED"))
@@ -341,32 +347,45 @@ async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, in
 
     return matches_created, exceptions_created
 async def generate_candidates(db: AsyncSession) -> int:
+    """Phase 6A amount-based candidate path, enriched with Phase 6B metadata."""
     candidates_created = 0
 
     erp_records = await get_unresolved_erp(db)
     payments = await get_unresolved_rzp_payments(db)
 
-    # Candidate: Same amount, different ref
+    # Phase 6A candidate behavior: same amount remains an investigative
+    # candidate and never becomes a reconciliation match automatically.
     pm_by_amount = defaultdict(list)
     for pm in payments:
         pm_by_amount[pm.amount].append(pm)
 
+    existing_keys = set((await db.scalars(select(ReconciliationCandidateModel.candidate_key))).all())
     for erp in erp_records:
         if erp.amount in pm_by_amount:
             for pm in pm_by_amount[erp.amount]:
-                # If they share the same amount, this is ambiguous.
+                key = deterministic_key("POTENTIAL_1_1", [erp.reference_id, pm.rzp_payment_id])
+                if key in existing_keys:
+                    continue
+                signals, score = candidate_signals(erp, pm)
                 payload = {
                     "erp_id": str(erp.id),
                     "rzp_id": str(pm.id),
-                    "signal": "AMOUNT_MATCH_REF_MISMATCH"
+                    "signal": "AMOUNT_MATCH_REF_MISMATCH",
+                    "erp_source_id": erp.reference_id,
+                    "rzp_source_id": pm.rzp_payment_id,
+                    "signals": signals,
                 }
                 candidate = ReconciliationCandidateModel(
+                    candidate_key=key,
                     candidate_type="POTENTIAL_1_1",
-                    evidence_payload=payload
+                    score=score,
+                    evidence_payload=payload,
                 )
                 db.add(candidate)
+                existing_keys.add(key)
                 candidates_created += 1
 
+    await db.flush()
     return candidates_created
 
 
@@ -394,6 +413,12 @@ async def run_reconciliation(db: AsyncSession) -> RunReconciliationResponse:
 
     # Stage E - Candidate Generation (only for unresolved)
     c = await generate_candidates(db)
+
+    # Phase 6B extends Stage E with additional deterministic signals, then
+    # consumes the complete candidate set to create idempotent exceptions.
+    additional_candidates = await generate_workbench_candidates(db)
+    c += len(additional_candidates)
+    await generate_exceptions(db)
 
     await db.commit()
 
