@@ -340,3 +340,57 @@ class RazorpaySyncStateModel(Base):
     duplicates_ignored = Column(Integer, nullable=False, default=0)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ReconciliationRunModel(Base):
+    __tablename__ = "reconciliation_runs"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    run_key = Column(String, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="REQUESTED", index=True)
+    requested_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    initiated_by = Column(String, nullable=True)
+    correlation_id = Column(String, nullable=True, index=True)
+    from_ts = Column(Integer, nullable=True)
+    to_ts = Column(Integer, nullable=True)
+    current_stage = Column(String, nullable=True)
+    matches_created = Column(Integer, nullable=False, default=0)
+    candidates_created = Column(Integer, nullable=False, default=0)
+    exceptions_created = Column(Integer, nullable=False, default=0)
+    records_examined = Column(Integer, nullable=False, default=0)
+    errors_count = Column(Integer, nullable=False, default=0)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    retry_of_id = _uuid_col(ForeignKey("reconciliation_runs.id"), nullable=True)
+    attempt = Column(Integer, nullable=False, default=1)
+
+    stages = relationship("ReconciliationStageRunModel", back_populates="run", cascade="all, delete-orphan")
+    __table_args__ = (
+        CheckConstraint("status IN ('REQUESTED','RUNNING','SUCCEEDED','PARTIAL','FAILED','CANCELLED')", name="ck_reconciliation_run_status"),
+    )
+
+
+class ReconciliationStageRunModel(Base):
+    __tablename__ = "reconciliation_stage_runs"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    run_id = _uuid_col(ForeignKey("reconciliation_runs.id"), nullable=False, index=True)
+    stage_name = Column(String, nullable=False)
+    sequence = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="REQUESTED")
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    records_examined = Column(Integer, nullable=False, default=0)
+    matches_created = Column(Integer, nullable=False, default=0)
+    candidates_created = Column(Integer, nullable=False, default=0)
+    exceptions_created = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+
+    run = relationship("ReconciliationRunModel", back_populates="stages")
+    __table_args__ = (
+        UniqueConstraint("run_id", "stage_name", name="uq_reconciliation_stage_run"),
+        CheckConstraint("status IN ('REQUESTED','RUNNING','SUCCEEDED','FAILED','SKIPPED')", name="ck_reconciliation_stage_status"),
+    )

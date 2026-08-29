@@ -65,6 +65,47 @@ class RunReconciliationResponse(BaseModel):
     exceptions_created: int
 
 
+class ReconciliationStageRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    stage_name: str
+    sequence: int
+    status: str
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    duration_ms: int
+    records_examined: int
+    matches_created: int
+    candidates_created: int
+    exceptions_created: int
+    error_message: Optional[str]
+
+
+class ReconciliationRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    run_key: str
+    status: str
+    requested_at: datetime
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    initiated_by: Optional[str]
+    correlation_id: Optional[str]
+    from_ts: Optional[int]
+    to_ts: Optional[int]
+    current_stage: Optional[str]
+    matches_created: int
+    candidates_created: int
+    exceptions_created: int
+    records_examined: int
+    errors_count: int
+    duration_ms: int
+    error_message: Optional[str]
+    retry_of_id: Optional[UUID]
+    attempt: int
+    stages: List[ReconciliationStageRunResponse] = []
+
+
 class ExceptionEvidenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
