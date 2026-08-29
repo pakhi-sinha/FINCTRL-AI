@@ -9,7 +9,7 @@ from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from typing import Any
 import os
 
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, event, inspect
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, CheckConstraint, event, inspect
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -220,7 +220,9 @@ class ReconciliationCandidateModel(Base):
     __tablename__ = "reconciliation_candidates"
 
     id = _uuid_col(primary_key=True, default=get_uuid)
+    candidate_key = Column(String, nullable=True, unique=True)
     candidate_type = Column(String, nullable=False) # e.g. "POTENTIAL_1_1", "PARTIAL_SETTLEMENT"
+    score = Column(Integer, nullable=False, default=0)
     evidence_payload = Column(JSONType, nullable=False) # Source IDs and signals
     status = Column(String, nullable=False, default="PENDING_INVESTIGATION")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -237,6 +239,64 @@ class ExceptionModel(Base):
     status = Column(String, nullable=False, default="OPEN")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ReconciliationExceptionModel(Base):
+    __tablename__ = "reconciliation_exceptions"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    exception_key = Column(String, nullable=False, unique=True, index=True)
+    exception_type = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="OPEN", index=True)
+    severity = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolution_type = Column(String, nullable=True)
+    resolution_note = Column(Text, nullable=True)
+
+    evidence = relationship("ExceptionEvidenceModel", back_populates="exception", cascade="all, delete-orphan")
+    audit_entries = relationship("ExceptionAuditModel", back_populates="exception", cascade="all, delete-orphan")
+    __table_args__ = (
+        CheckConstraint("status IN ('OPEN','INVESTIGATING','RESOLVED','DISMISSED')", name="ck_reconciliation_exception_status"),
+        CheckConstraint("severity IN ('LOW','MEDIUM','HIGH','CRITICAL')", name="ck_reconciliation_exception_severity"),
+        CheckConstraint(
+            "exception_type IN ('MISSING_ERP','MISSING_RAZORPAY','MISSING_BANK','AMOUNT_MISMATCH','REFERENCE_MISMATCH','TIMING_MISMATCH','SETTLEMENT_MISMATCH','REFUND_MISMATCH','DUPLICATE_CANDIDATE','AMBIGUOUS_MATCH','UNMATCHED')",
+            name="ck_reconciliation_exception_type",
+        ),
+    )
+
+
+class ExceptionEvidenceModel(Base):
+    __tablename__ = "exception_evidence"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    exception_id = _uuid_col(ForeignKey("reconciliation_exceptions.id"), nullable=False, index=True)
+    record_type = Column(String, nullable=False)
+    record_id = _uuid_col(nullable=False)
+    source_id = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    exception = relationship("ReconciliationExceptionModel", back_populates="evidence")
+    __table_args__ = (
+        UniqueConstraint("exception_id", "record_type", "record_id", name="uix_exception_evidence_record"),
+    )
+
+
+class ExceptionAuditModel(Base):
+    __tablename__ = "exception_audits"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    exception_id = _uuid_col(ForeignKey("reconciliation_exceptions.id"), nullable=False, index=True)
+    previous_status = Column(String, nullable=False)
+    new_status = Column(String, nullable=False)
+    resolution_type = Column(String, nullable=True)
+    resolution_note = Column(Text, nullable=True)
+    actor = Column(String, nullable=True)
+    timestamp = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    exception = relationship("ReconciliationExceptionModel", back_populates="audit_entries")
 
 class AuditLogModel(Base):
     __tablename__ = "audit_logs"
