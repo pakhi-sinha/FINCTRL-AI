@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from finctrl.backend.database.models import (
     FinancialEventModel,
     financial_event_id,
+    razorpay_payload_event_key,
     RazorpayOrderModel,
     RazorpayPaymentModel,
     RazorpaySettlementModel,
@@ -46,41 +47,57 @@ class WebhookProcessor:
         """
         payload_hash = hashlib.sha256(body_bytes).hexdigest()
 
-        # 1. Check the durable ledger before attempting ingestion.
-        existing = await self.db.execute(
-            select(FinancialEventModel).filter_by(
-                provider="razorpay",
-                provider_event_id=event_id
-            )
-        )
-        existing_event = existing.scalar_one_or_none()
-
-        if existing_event:
-            if existing_event.payload_hash != payload_hash:
-                return False, str(existing_event.id), "Event ID payload conflict"
-            if existing_event.processing_status == "FAILED":
-                success, replayed_id, error = await self.replay_event(str(existing_event.id))
+        # Preserve Phase 6A delivery-ID idempotency for object-less events.
+        delivery_event = await self.db.scalar(select(FinancialEventModel).where(
+            FinancialEventModel.provider == "razorpay",
+            FinancialEventModel.provider_event_id == event_id,
+        ))
+        if delivery_event:
+            if delivery_event.payload_hash != payload_hash:
+                return False, str(delivery_event.id), "Event ID payload conflict"
+            if delivery_event.processing_status == "FAILED":
+                success, replayed_id, error = await self.replay_event(str(delivery_event.id))
                 return False, replayed_id, error if not success else None
-            logger.info(
-                f"Webhook already processed: event_id={event_id}, status={existing_event.processing_status}",
-                extra={"event_id": event_id, "status": existing_event.processing_status}
-            )
-            return True, str(existing_event.id), None
+            return True, str(delivery_event.id), None
 
-        # 2. Verify signature
+        # 1. Verify signature
         if not self._verify_signature(body_bytes, signature):
             logger.warning(f"Invalid signature for webhook: event_id={event_id}")
             return False, None, "Invalid signature"
 
-        # 3. Parse payload
+        # 2. Parse payload
         try:
             payload = json.loads(body_bytes)
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON payload for webhook: event_id={event_id}")
             return False, None, "Invalid JSON payload"
 
+        # 3. Resolve the same object-level ledger identity used by API sync.
+        canonical_event_id = razorpay_payload_event_key(payload, event_id)
+        existing_event = await self.db.scalar(select(FinancialEventModel).where(
+            FinancialEventModel.provider == "razorpay",
+            FinancialEventModel.provider_event_id == canonical_event_id,
+        ))
+        if existing_event:
+            is_delivery_fallback = canonical_event_id == event_id
+            if is_delivery_fallback and existing_event.payload_hash != payload_hash:
+                return False, str(existing_event.id), "Event ID payload conflict"
+            if existing_event.processing_status == "FAILED":
+                success, replayed_id, error = await self.replay_event(str(existing_event.id))
+                return False, replayed_id, error if not success else None
+            await self._record_delivery(existing_event, event_id)
+            await self.db.commit()
+            return True, str(existing_event.id), None
+
         # 4. Create event with atomic transaction
         return await self._create_and_process_event(event_id, body_bytes, payload)
+
+    async def _record_delivery(self, event_model, delivery_event_id):
+        self.db.add(AuditLogModel(
+            entity_type="FINANCIAL_EVENT", entity_id=event_model.id,
+            action="RAZORPAY_WEBHOOK_DELIVERY", actor="RAZORPAY",
+            changes={"delivery_event_id": delivery_event_id},
+        ))
 
     async def _create_and_process_event(
         self,
@@ -94,12 +111,13 @@ class WebhookProcessor:
         """
         payload_hash = hashlib.sha256(body_bytes).hexdigest()
         event_type = payload.get("event", "unknown")
+        canonical_event_id = razorpay_payload_event_key(payload, event_id)
 
         # Create event model
         event_model = FinancialEventModel(
-            id=financial_event_id("razorpay", event_id),
+            id=financial_event_id("razorpay", canonical_event_id),
             provider="razorpay",
-            provider_event_id=event_id,
+            provider_event_id=canonical_event_id,
             event_type=event_type,
             payload_hash=payload_hash,
             raw_payload=payload,
@@ -114,6 +132,7 @@ class WebhookProcessor:
 
             # Try to process the webhook
             await self._process_event_payload(event_model, payload)
+            await self._record_delivery(event_model, event_id)
 
             # Success - commit the transaction
             event_model.processing_status = "PROCESSED"
@@ -135,12 +154,14 @@ class WebhookProcessor:
             existing = await self.db.execute(
                 select(FinancialEventModel).filter_by(
                     provider="razorpay",
-                    provider_event_id=event_id
+                    provider_event_id=canonical_event_id
                 )
             )
             existing_event = existing.scalar_one_or_none()
 
             if existing_event and existing_event.processing_status == "PROCESSED":
+                await self._record_delivery(existing_event, event_id)
+                await self.db.commit()
                 logger.info(
                     f"Webhook processed concurrently: event_id={event_id}",
                     extra={"event_id": event_id, "event_uuid": str(existing_event.id)}
@@ -164,9 +185,9 @@ class WebhookProcessor:
 
             # Create failed event
             failed_event = FinancialEventModel(
-                id=financial_event_id("razorpay", event_id),
+                id=financial_event_id("razorpay", canonical_event_id),
                 provider="razorpay",
-                provider_event_id=event_id,
+                provider_event_id=canonical_event_id,
                 event_type=event_type,
                 payload_hash=payload_hash,
                 raw_payload=payload,
@@ -200,6 +221,10 @@ class WebhookProcessor:
         """Process order.paid event."""
         order_data = payload.get("payload", {}).get("order", {}).get("entity", {})
         if order_data:
+            existing = (await self.db.scalars(select(RazorpayOrderModel).where(
+                RazorpayOrderModel.rzp_order_id == order_data.get("id")))).first()
+            if existing:
+                return
             om = RazorpayOrderModel(
                 source_event_id=event_model.id,
                 rzp_order_id=order_data.get("id"),
@@ -215,6 +240,10 @@ class WebhookProcessor:
         """Process payment.captured event."""
         payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
         if payment_data:
+            existing = (await self.db.scalars(select(RazorpayPaymentModel).where(
+                RazorpayPaymentModel.rzp_payment_id == payment_data.get("id")))).first()
+            if existing:
+                return
             pm = RazorpayPaymentModel(
                 source_event_id=event_model.id,
                 rzp_payment_id=payment_data.get("id"),
@@ -230,6 +259,10 @@ class WebhookProcessor:
         """Process settlement.processed event."""
         settlement_data = payload.get("payload", {}).get("settlement", {}).get("entity", {})
         if settlement_data:
+            existing = (await self.db.scalars(select(RazorpaySettlementModel).where(
+                RazorpaySettlementModel.rzp_settlement_id == settlement_data.get("id")))).first()
+            if existing:
+                return
             sm = RazorpaySettlementModel(
                 source_event_id=event_model.id,
                 rzp_settlement_id=settlement_data.get("id"),
@@ -245,6 +278,10 @@ class WebhookProcessor:
         """Process refund.processed event."""
         refund_data = payload.get("payload", {}).get("refund", {}).get("entity", {})
         if refund_data:
+            existing = (await self.db.scalars(select(RazorpayRefundModel).where(
+                RazorpayRefundModel.rzp_refund_id == refund_data.get("id")))).first()
+            if existing:
+                return
             rm = RazorpayRefundModel(
                 source_event_id=event_model.id,
                 rzp_refund_id=refund_data.get("id"),

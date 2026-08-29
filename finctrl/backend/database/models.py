@@ -56,6 +56,20 @@ def financial_event_id(provider: str, provider_event_id: str):
     return str(value) if is_sqlite else value
 
 
+def razorpay_source_event_key(entity_type: str, provider_object_id: str) -> str:
+    """Canonical ledger key shared by Razorpay API and webhook ingestion."""
+    return f"{entity_type.lower()}:{provider_object_id}"
+
+
+def razorpay_payload_event_key(payload: dict, fallback_event_id: str) -> str:
+    """Resolve an object identity, retaining delivery identity for object-less events."""
+    event_type = payload.get("event", "")
+    entity_type = event_type.split(".", 1)[0]
+    entity = payload.get("payload", {}).get(entity_type, {}).get("entity", {}) if isinstance(payload.get("payload"), dict) else {}
+    provider_object_id = entity.get("id") if isinstance(entity, dict) else None
+    return razorpay_source_event_key(entity_type, provider_object_id) if entity_type and provider_object_id else fallback_event_id
+
+
 class FinancialEventModel(Base):
     __tablename__ = "financial_events"
 
@@ -308,3 +322,21 @@ class AuditLogModel(Base):
     actor = Column(String, nullable=False, default="SYSTEM")
     timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)
     changes = Column(JSONType, nullable=False)
+
+
+class RazorpaySyncStateModel(Base):
+    __tablename__ = "razorpay_sync_state"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    resource_type = Column(String, nullable=False, unique=True, index=True)
+    last_from_ts = Column(Integer, nullable=True)
+    last_to_ts = Column(Integer, nullable=True)
+    last_provider_timestamp = Column(Integer, nullable=True)
+    last_status = Column(String, nullable=False, default="NEVER_RUN")
+    last_error = Column(Text, nullable=True)
+    records_fetched = Column(Integer, nullable=False, default=0)
+    records_created = Column(Integer, nullable=False, default=0)
+    records_updated = Column(Integer, nullable=False, default=0)
+    duplicates_ignored = Column(Integer, nullable=False, default=0)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
