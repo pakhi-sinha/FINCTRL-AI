@@ -32,6 +32,7 @@ from finctrl.backend.database.models import (
     AuditLogModel,
     RazorpaySyncStateModel,
     ReconciliationRunModel,
+    ReconciliationPeriodModel,
 )
 from finctrl.backend.api.schemas import (
     HealthCheckResponse,
@@ -47,8 +48,10 @@ from finctrl.backend.api.schemas import (
     ExceptionResolutionRequest,
     ReconciliationRunResponse,
     ReconciliationStageRunResponse,
+    ReconciliationPeriodResponse,
 )
 from finctrl.backend.reconciliation.run_control import ReconciliationRunService
+from finctrl.backend.reconciliation.reporting import ReconciliationReportingService
 from finctrl.backend.reconciliation.workbench import transition_exception
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 from finctrl.backend.integrations.razorpay.client import RazorpayConnectorError
@@ -442,6 +445,83 @@ async def retry_reconciliation_run(run_id: str, request: Request, actor: str = D
         raise HTTPException(status_code=409, detail=str(error))
 
 
+async def _period_or_404(db, period_id):
+    try: parsed = UUID(period_id)
+    except ValueError: raise HTTPException(status_code=404, detail="Reconciliation period not found")
+    period = await ReconciliationReportingService(db).get_period(parsed)
+    if period is None: raise HTTPException(status_code=404, detail="Reconciliation period not found")
+    return period
+
+
+@router.post("/reconciliation/periods", response_model=ReconciliationPeriodResponse)
+async def create_reconciliation_period(request: Request, from_ts: int, to_ts: int,
+                                       notes: str | None = None,
+                                       actor: str = Depends(require_admin),
+                                       db: AsyncSession = Depends(get_db_session)):
+    try:
+        period, _ = await ReconciliationReportingService(db).create_period(
+            from_ts, to_ts, actor=actor, correlation_id=request.state.correlation_id, notes=notes)
+        return period
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.get("/reconciliation/periods", response_model=List[ReconciliationPeriodResponse], dependencies=[Depends(require_read_only)])
+async def list_reconciliation_periods(from_ts: int | None = None, to_ts: int | None = None,
+                                      db: AsyncSession = Depends(get_db_session)):
+    return await ReconciliationReportingService(db).list_periods(from_ts, to_ts)
+
+
+@router.get("/reconciliation/periods/{period_id}", response_model=ReconciliationPeriodResponse, dependencies=[Depends(require_read_only)])
+async def get_reconciliation_period(period_id: str, db: AsyncSession = Depends(get_db_session)):
+    return await _period_or_404(db, period_id)
+
+
+@router.post("/reconciliation/periods/{period_id}/close", response_model=ReconciliationPeriodResponse)
+async def close_reconciliation_period(period_id: str, request: Request,
+                                      actor: str = Depends(require_admin),
+                                      db: AsyncSession = Depends(get_db_session)):
+    period = await _period_or_404(db, period_id)
+    try:
+        return await ReconciliationReportingService(db).close_period(
+            period, actor=actor, correlation_id=request.state.correlation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.get("/reconciliation/reports", response_model=List[dict], dependencies=[Depends(require_read_only)])
+async def list_reconciliation_reports(db: AsyncSession = Depends(get_db_session)):
+    service = ReconciliationReportingService(db)
+    return [await service.report(period) for period in await service.list_periods()]
+
+
+@router.get("/reconciliation/reports/{period_id}", response_model=dict, dependencies=[Depends(require_read_only)])
+async def get_reconciliation_report(period_id: str, db: AsyncSession = Depends(get_db_session)):
+    return await ReconciliationReportingService(db).report(await _period_or_404(db, period_id))
+
+
+@router.get("/reconciliation/reports/{period_id}/exceptions", response_model=List[dict], dependencies=[Depends(require_read_only)])
+async def get_reconciliation_report_exceptions(period_id: str, status: str | None = None,
+                                                severity: str | None = None,
+                                                exception_type: str | None = None,
+                                                source: str | None = None,
+                                                db: AsyncSession = Depends(get_db_session)):
+    return await ReconciliationReportingService(db).exception_report(
+        await _period_or_404(db, period_id), status=status,
+        severity=severity, exception_type=exception_type, source=source)
+
+
+@router.get("/reconciliation/reports/{period_id}/runs", response_model=List[ReconciliationRunResponse], dependencies=[Depends(require_read_only)])
+async def get_reconciliation_report_runs(period_id: str, db: AsyncSession = Depends(get_db_session)):
+    service = ReconciliationReportingService(db)
+    return await service.list_period_runs(await _period_or_404(db, period_id))
+
+
+@router.get("/reconciliation/reports/{period_id}/close-readiness", response_model=dict, dependencies=[Depends(require_read_only)])
+async def get_reconciliation_close_readiness(period_id: str, db: AsyncSession = Depends(get_db_session)):
+    return await ReconciliationReportingService(db).readiness(await _period_or_404(db, period_id))
+
+
 async def _run_razorpay_sync(resource, from_ts, to_ts, db):
     try:
         service = RazorpaySyncService(db)
@@ -697,6 +777,16 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
     run_rows = (await db.scalars(select(ReconciliationRunModel))).all()
     completed_runs = [run for run in run_rows if run.status in {"SUCCEEDED", "PARTIAL", "FAILED"}]
     average_duration = int(sum(run.duration_ms for run in completed_runs) / len(completed_runs)) if completed_runs else 0
+    period_rows = (await db.scalars(select(ReconciliationPeriodModel))).all()
+    open_periods = [period for period in period_rows if period.status != "CLOSED"]
+    period_readiness = [await ReconciliationReportingService(db).readiness(period)
+                        for period in open_periods]
+    workbench_exceptions = (await db.scalars(select(ReconciliationExceptionModel).where(
+        ReconciliationExceptionModel.status.in_(("OPEN", "INVESTIGATING"))))).all()
+    open_by_severity = {
+        severity: sum(item.severity == severity for item in workbench_exceptions)
+        for severity in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+    }
 
     return MetricsResponse(
         records_processed=records_processed,
@@ -711,6 +801,11 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
         reconciliation_runs_partial=sum(run.status == "PARTIAL" for run in run_rows),
         reconciliation_runs_failed=sum(run.status == "FAILED" for run in run_rows),
         reconciliation_average_duration_ms=average_duration,
+        reconciliation_periods_open=len(open_periods),
+        reconciliation_periods_ready=sum(item["ready"] for item in period_readiness),
+        reconciliation_periods_blocked=sum(not item["ready"] for item in period_readiness),
+        reconciliation_periods_closed=sum(period.status == "CLOSED" for period in period_rows),
+        open_exceptions_by_severity=open_by_severity,
     )
 
 

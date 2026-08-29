@@ -394,3 +394,25 @@ class ReconciliationStageRunModel(Base):
         UniqueConstraint("run_id", "stage_name", name="uq_reconciliation_stage_run"),
         CheckConstraint("status IN ('REQUESTED','RUNNING','SUCCEEDED','FAILED','SKIPPED')", name="ck_reconciliation_stage_status"),
     )
+
+
+class ReconciliationPeriodModel(Base):
+    __tablename__ = "reconciliation_periods"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    period_key = Column(String, nullable=False, unique=True, index=True)
+    from_ts = Column(Integer, nullable=False)
+    to_ts = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="OPEN", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    opened_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(String, nullable=True)
+    closed_by = Column(String, nullable=True)
+    correlation_id = Column(String, nullable=True, index=True)
+    latest_run_id = _uuid_col(ForeignKey("reconciliation_runs.id"), nullable=True)
+    notes = Column(Text, nullable=True)
+    __table_args__ = (
+        CheckConstraint("status IN ('OPEN','READY','BLOCKED','CLOSED')", name="ck_reconciliation_period_status"),
+        CheckConstraint("from_ts <= to_ts", name="ck_reconciliation_period_window"),
+    )

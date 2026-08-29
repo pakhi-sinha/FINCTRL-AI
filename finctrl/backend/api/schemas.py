@@ -106,6 +106,23 @@ class ReconciliationRunResponse(BaseModel):
     stages: List[ReconciliationStageRunResponse] = []
 
 
+class ReconciliationPeriodResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    period_key: str
+    from_ts: int
+    to_ts: int
+    status: str
+    created_at: datetime
+    opened_at: datetime
+    closed_at: Optional[datetime]
+    created_by: Optional[str]
+    closed_by: Optional[str]
+    correlation_id: Optional[str]
+    latest_run_id: Optional[UUID]
+    notes: Optional[str]
+
+
 class ExceptionEvidenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

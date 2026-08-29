@@ -15,3 +15,8 @@ class MetricsResponse(BaseModel):
     reconciliation_runs_partial: int = 0
     reconciliation_runs_failed: int = 0
     reconciliation_average_duration_ms: int = 0
+    reconciliation_periods_open: int = 0
+    reconciliation_periods_ready: int = 0
+    reconciliation_periods_blocked: int = 0
+    reconciliation_periods_closed: int = 0
+    open_exceptions_by_severity: dict[str, int] = {}
