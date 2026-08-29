@@ -29,7 +29,8 @@ from finctrl.backend.database.models import (
     ExceptionModel,
     ReconciliationExceptionModel,
     ExceptionEvidenceModel,
-    AuditLogModel
+    AuditLogModel,
+    RazorpaySyncStateModel,
 )
 from finctrl.backend.api.schemas import (
     HealthCheckResponse,
@@ -47,6 +48,8 @@ from finctrl.backend.api.schemas import (
 from finctrl.backend.reconciliation.engine import run_reconciliation
 from finctrl.backend.reconciliation.workbench import transition_exception
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
+from finctrl.backend.integrations.razorpay.client import RazorpayConnectorError
+from finctrl.backend.integrations.razorpay.sync import RazorpaySyncService
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from finctrl.backend.engine.ai.agent import AIAgent
@@ -386,6 +389,37 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
 async def trigger_reconciliation(db: AsyncSession = Depends(get_db_session)):
     stats = await run_reconciliation(db)
     return stats
+
+
+async def _run_razorpay_sync(resource, from_ts, to_ts, db):
+    try:
+        service = RazorpaySyncService(db)
+        return await (service.sync_all(from_ts=from_ts, to_ts=to_ts) if resource is None else
+                      service.sync_resource(resource, from_ts=from_ts, to_ts=to_ts))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except RazorpayConnectorError as error:
+        raise HTTPException(status_code=503 if error.transient else 502, detail=str(error))
+
+
+@router.post("/razorpay/sync", dependencies=[Depends(require_admin)])
+async def sync_razorpay(from_ts: int | None = None, to_ts: int | None = None,
+                        db: AsyncSession = Depends(get_db_session)):
+    return await _run_razorpay_sync(None, from_ts, to_ts, db)
+
+
+@router.post("/razorpay/sync/{resource}", dependencies=[Depends(require_admin)])
+async def sync_razorpay_resource(resource: str, from_ts: int | None = None, to_ts: int | None = None,
+                                 db: AsyncSession = Depends(get_db_session)):
+    return await _run_razorpay_sync(resource, from_ts, to_ts, db)
+
+
+@router.get("/razorpay/sync-status", dependencies=[Depends(require_read_only)])
+async def razorpay_sync_status(db: AsyncSession = Depends(get_db_session)):
+    states = (await db.scalars(select(RazorpaySyncStateModel).order_by(RazorpaySyncStateModel.resource_type))).all()
+    return [{"resource_type": state.resource_type, "status": state.last_status,
+             "last_provider_timestamp": state.last_provider_timestamp,
+             "last_run_at": state.last_run_at} for state in states]
 
 
 # READ-ONLY endpoints
