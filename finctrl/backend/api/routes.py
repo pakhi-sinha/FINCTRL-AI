@@ -31,6 +31,7 @@ from finctrl.backend.database.models import (
     ExceptionEvidenceModel,
     AuditLogModel,
     RazorpaySyncStateModel,
+    ReconciliationRunModel,
 )
 from finctrl.backend.api.schemas import (
     HealthCheckResponse,
@@ -44,8 +45,10 @@ from finctrl.backend.api.schemas import (
     RunReconciliationResponse,
     ReconciliationExceptionResponse,
     ExceptionResolutionRequest,
+    ReconciliationRunResponse,
+    ReconciliationStageRunResponse,
 )
-from finctrl.backend.reconciliation.engine import run_reconciliation
+from finctrl.backend.reconciliation.run_control import ReconciliationRunService
 from finctrl.backend.reconciliation.workbench import transition_exception
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 from finctrl.backend.integrations.razorpay.client import RazorpayConnectorError
@@ -385,10 +388,58 @@ async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
 
 
-@router.post("/reconciliation/run", response_model=RunReconciliationResponse, dependencies=[Depends(require_admin)])
-async def trigger_reconciliation(db: AsyncSession = Depends(get_db_session)):
-    stats = await run_reconciliation(db)
-    return stats
+@router.post("/reconciliation/run", response_model=RunReconciliationResponse)
+async def trigger_reconciliation(request: Request, actor: str = Depends(require_admin)):
+    correlation_id = request.state.correlation_id
+    run = await ReconciliationRunService().request_and_run(
+        actor=actor, correlation_id=correlation_id, request_key=correlation_id)
+    legacy_exceptions = sum(stage.exceptions_created for stage in run.stages if stage.sequence < 5)
+    return RunReconciliationResponse(matches_created=run.matches_created,
+        candidates_created=run.candidates_created, exceptions_created=legacy_exceptions)
+
+
+@router.post("/reconciliation/runs", response_model=ReconciliationRunResponse)
+async def create_reconciliation_run(request: Request, from_ts: int | None = None,
+                                    to_ts: int | None = None, idempotency_key: str | None = None,
+                                    actor: str = Depends(require_admin)):
+    correlation_id = request.state.correlation_id
+    return await ReconciliationRunService().request_and_run(
+        actor=actor, correlation_id=correlation_id, from_ts=from_ts, to_ts=to_ts,
+        request_key=idempotency_key or correlation_id)
+
+
+async def _run_or_404(run_id):
+    try: parsed = UUID(run_id)
+    except ValueError: raise HTTPException(status_code=404, detail="Reconciliation run not found")
+    run = await ReconciliationRunService().get_run(parsed)
+    if run is None: raise HTTPException(status_code=404, detail="Reconciliation run not found")
+    return run
+
+
+@router.get("/reconciliation/runs", response_model=List[ReconciliationRunResponse], dependencies=[Depends(require_read_only)])
+async def list_reconciliation_runs():
+    return await ReconciliationRunService().list_runs()
+
+
+@router.get("/reconciliation/runs/{run_id}", response_model=ReconciliationRunResponse, dependencies=[Depends(require_read_only)])
+async def get_reconciliation_run(run_id: str):
+    return await _run_or_404(run_id)
+
+
+@router.get("/reconciliation/runs/{run_id}/stages", response_model=List[ReconciliationStageRunResponse], dependencies=[Depends(require_read_only)])
+async def get_reconciliation_run_stages(run_id: str):
+    run = await _run_or_404(run_id)
+    return sorted(run.stages, key=lambda stage: stage.sequence)
+
+
+@router.post("/reconciliation/runs/{run_id}/retry", response_model=ReconciliationRunResponse)
+async def retry_reconciliation_run(run_id: str, request: Request, actor: str = Depends(require_admin)):
+    run = await _run_or_404(run_id)
+    try:
+        return await ReconciliationRunService().retry(
+            run.id, actor=actor, correlation_id=request.state.correlation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 async def _run_razorpay_sync(resource, from_ts, to_ts, db):
@@ -643,6 +694,10 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
     candidate_count = await db.execute(select(func.count(ReconciliationCandidateModel.id)))
     candidates_created = candidate_count.scalar() or 0
 
+    run_rows = (await db.scalars(select(ReconciliationRunModel))).all()
+    completed_runs = [run for run in run_rows if run.status in {"SUCCEEDED", "PARTIAL", "FAILED"}]
+    average_duration = int(sum(run.duration_ms for run in completed_runs) / len(completed_runs)) if completed_runs else 0
+
     return MetricsResponse(
         records_processed=records_processed,
         records_reconciled=records_reconciled,
@@ -650,7 +705,12 @@ async def get_metrics(db: AsyncSession = Depends(get_db_session)):
         exceptions_resolved=exceptions_resolved,
         exceptions_escalated=exceptions_escalated,
         candidates_created=candidates_created,
-        processing_failures=processing_failures
+        processing_failures=processing_failures,
+        reconciliation_runs_total=len(run_rows),
+        reconciliation_runs_succeeded=sum(run.status == "SUCCEEDED" for run in run_rows),
+        reconciliation_runs_partial=sum(run.status == "PARTIAL" for run in run_rows),
+        reconciliation_runs_failed=sum(run.status == "FAILED" for run in run_rows),
+        reconciliation_average_duration_ms=average_duration,
     )
 
 

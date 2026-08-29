@@ -389,6 +389,14 @@ async def generate_candidates(db: AsyncSession) -> int:
     return candidates_created
 
 
+async def stage_e_candidates_and_exceptions(db: AsyncSession) -> Tuple[int, int]:
+    """Run the existing Phase 6A candidate and Phase 6B workbench paths."""
+    candidates = await generate_candidates(db)
+    additional_candidates = await generate_workbench_candidates(db)
+    exceptions = await generate_exceptions(db)
+    return candidates + len(additional_candidates), exceptions
+
+
 async def run_reconciliation(db: AsyncSession) -> RunReconciliationResponse:
     matches = 0
     exceptions = 0
@@ -412,13 +420,7 @@ async def run_reconciliation(db: AsyncSession) -> RunReconciliationResponse:
     exceptions += e
 
     # Stage E - Candidate Generation (only for unresolved)
-    c = await generate_candidates(db)
-
-    # Phase 6B extends Stage E with additional deterministic signals, then
-    # consumes the complete candidate set to create idempotent exceptions.
-    additional_candidates = await generate_workbench_candidates(db)
-    c += len(additional_candidates)
-    await generate_exceptions(db)
+    c, _ = await stage_e_candidates_and_exceptions(db)
 
     await db.commit()
 
