@@ -1,11 +1,12 @@
 """Deterministic exception and evidence workbench built on authoritative records."""
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from finctrl.backend.database.models import (
     BankRecordModel,
@@ -46,6 +47,10 @@ def deterministic_key(kind: str, identities: Iterable[str]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def provider_timestamp_utc(timestamp: int) -> datetime | None:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else None
+
+
 def candidate_signals(erp: ERPRecordModel, payment: RazorpayPaymentModel) -> tuple[list[str], int]:
     signals: list[str] = []
     score = 0
@@ -58,8 +63,9 @@ def candidate_signals(erp: ERPRecordModel, payment: RazorpayPaymentModel) -> tup
     if erp.currency == payment.currency:
         signals.append("currency_exact")
         score += 20
-    payment_time = datetime.fromtimestamp(payment.created_at_ts) if payment.created_at_ts else None
-    erp_time = erp.timestamp.replace(tzinfo=None) if erp.timestamp.tzinfo else erp.timestamp
+    payment_time = provider_timestamp_utc(payment.created_at_ts)
+    erp_time = erp.timestamp
+    erp_time = erp_time.replace(tzinfo=timezone.utc) if erp_time.tzinfo is None else erp_time.astimezone(timezone.utc)
     if payment_time and abs((erp_time - payment_time).total_seconds()) <= 86400:
         signals.append("timestamp_within_24h")
         score += 10
@@ -122,8 +128,17 @@ async def _upsert_exception(
         severity=severity,
         description=description,
     )
-    db.add(exception)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(exception)
+            await db.flush([exception])
+    except IntegrityError:
+        existing = await db.scalar(select(ReconciliationExceptionModel).where(
+            ReconciliationExceptionModel.exception_key == key
+        ))
+        if existing is None:
+            raise
+        return existing, False
     for record_type, record in evidence:
         db.add(ExceptionEvidenceModel(
             exception_id=exception.id,
@@ -131,6 +146,7 @@ async def _upsert_exception(
             record_id=record.id,
             source_id=stable_source_id(record),
         ))
+    await db.flush()
     return exception, True
 
 
@@ -142,20 +158,90 @@ async def generate_exceptions(db: AsyncSession) -> int:
     payments = list((await db.scalars(select(RazorpayPaymentModel).where(
         RazorpayPaymentModel.reconciliation_status != "RECONCILED"
     ))).all())
+    all_payments = list((await db.scalars(select(RazorpayPaymentModel))).all())
+    # Reconciled bank rows remain authoritative evidence and must not be hidden
+    # from exception evaluation.
+    banks = list((await db.scalars(select(BankRecordModel))).all())
+    settlements = list((await db.scalars(select(RazorpaySettlementModel))).all())
+    refunds = list((await db.scalars(select(RazorpayRefundModel))).all())
     created = 0
     candidates_by_erp: dict[str, list[ReconciliationCandidateModel]] = {}
     for candidate in candidates:
         candidates_by_erp.setdefault(candidate.evidence_payload["erp_id"], []).append(candidate)
 
-    payments_by_order = {payment.rzp_order_id: payment for payment in payments if payment.rzp_order_id}
+    payments_by_order: dict[str, list[RazorpayPaymentModel]] = {}
+    for payment in payments:
+        if payment.rzp_order_id:
+            payments_by_order.setdefault(payment.rzp_order_id, []).append(payment)
+
+    def valid_bank_evidence(payment: RazorpayPaymentModel) -> list[BankRecordModel]:
+        settlement = next((
+            item for item in settlements
+            if payment.rzp_settlement_id and item.rzp_settlement_id == payment.rzp_settlement_id
+        ), None)
+        if settlement is not None:
+            linked_payments = [
+                item for item in all_payments
+                if item.rzp_settlement_id == settlement.rzp_settlement_id
+            ]
+            calculated_net = 0
+            for linked_payment in linked_payments:
+                contribution = linked_payment.amount - (linked_payment.fee or 0) - (linked_payment.tax or 0)
+                contribution -= sum(
+                    refund.amount for refund in refunds
+                    if refund.rzp_payment_id == linked_payment.rzp_payment_id
+                    and refund.status == "processed"
+                    and refund.created_at_ts <= settlement.created_at_ts
+                )
+                calculated_net += contribution
+            # Preserve Phase 6A settlement arithmetic: an inconsistent
+            # settlement is not accepted as valid bank evidence here.
+            if calculated_net != settlement.amount:
+                return []
+            expected_amount = settlement.amount
+        else:
+            expected_amount = payment.amount - (payment.fee or 0) - (payment.tax or 0)
+
+        def has_reference(bank: BankRecordModel) -> bool:
+            transaction_ref = bank.transaction_ref or ""
+            description = bank.description or ""
+            if settlement is not None:
+                if settlement.utr and settlement.utr == transaction_ref:
+                    return True
+                if settlement.rzp_settlement_id in transaction_ref:
+                    return True
+                if settlement.rzp_settlement_id in description:
+                    return True
+            if payment.rzp_payment_id in transaction_ref:
+                return True
+            return payment.rzp_payment_id in description
+
+        return [
+            bank for bank in banks
+            if bank.amount == expected_amount and has_reference(bank)
+        ]
+
     for erp in erps:
         related = candidates_by_erp.get(str(erp.id), [])
-        exact_payment = payments_by_order.get(erp.reference_id)
-        if exact_payment:
+        exact_payments = [
+            payment for payment in payments_by_order.get(erp.reference_id, [])
+            if payment.amount == erp.amount and payment.currency == erp.currency
+        ]
+        if len(exact_payments) > 1:
+            evidence = [("ERP", erp), *(("RZP", payment) for payment in exact_payments)]
+            evidence.extend(("RECONCILIATION_CANDIDATE", item) for item in related)
+            _, was_created = await _upsert_exception(
+                db, "AMBIGUOUS_MATCH", "HIGH",
+                "Multiple authoritative Razorpay payments remain valid for the ERP order.", evidence,
+            )
+        elif len(exact_payments) == 1 and not valid_bank_evidence(exact_payments[0]):
+            exact_payment = exact_payments[0]
             _, was_created = await _upsert_exception(
                 db, "MISSING_BANK", "HIGH", "No authoritative bank record completed this ERP/Razorpay pair.",
                 [("ERP", erp), ("RZP", exact_payment)],
             )
+        elif len(exact_payments) == 1:
+            continue
         elif len(related) > 1:
             evidence = [("ERP", erp), *(("RECONCILIATION_CANDIDATE", item) for item in related)]
             _, was_created = await _upsert_exception(
