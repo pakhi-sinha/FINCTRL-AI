@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional, Any
 from datetime import datetime
 from finctrl.backend.schemas.models import ERPRecord, RazorpayRecord, BankRecord
@@ -166,3 +166,8 @@ class ReconciliationExceptionResponse(BaseModel):
 class ExceptionResolutionRequest(BaseModel):
     resolution_type: Optional[str] = None
     resolution_note: Optional[str] = None
+
+
+class InvestigationDecisionRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
