@@ -52,6 +52,7 @@ from finctrl.backend.api.schemas import (
     ReconciliationStageRunResponse,
     ReconciliationPeriodResponse,
     InvestigationDecisionRequest,
+    CashForecastResponse,
 )
 from finctrl.backend.reconciliation.run_control import ReconciliationRunService
 from finctrl.backend.reconciliation.reporting import ReconciliationReportingService
@@ -63,11 +64,30 @@ from finctrl.backend.api.cash_position_schema import CashPositionResponse
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from finctrl.backend.engine.ai.agent import AIAgent
 from finctrl.backend.reconciliation.investigation import InvestigationService, InvestigationProviderError
+from finctrl.backend.reconciliation.forecasting import CashForecastService
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 
 router = APIRouter()
 _webhook_locks: dict[str, asyncio.Lock] = {}
+
+
+@router.get("/forecast/cash", response_model=CashForecastResponse, dependencies=[Depends(require_read_only)])
+async def cash_forecast(from_ts: int, to_ts: int, horizon_days: int = 14, currency: str | None = None,
+                        db: AsyncSession = Depends(get_db_session)):
+    try:
+        return await CashForecastService(db).forecast(from_ts, to_ts, horizon_days, currency)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.get("/forecast/cash/summary", response_model=dict, dependencies=[Depends(require_read_only)])
+async def cash_forecast_summary(from_ts: int, to_ts: int, horizon_days: int = 14,
+                                currency: str | None = None, db: AsyncSession = Depends(get_db_session)):
+    try:
+        return await CashForecastService(db).summary(from_ts, to_ts, horizon_days, currency)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
 
 def verify_signature(payload_body: bytes, signature: str, secret: str) -> bool:
@@ -554,7 +574,10 @@ async def razorpay_sync_status(db: AsyncSession = Depends(get_db_session)):
     states = (await db.scalars(select(RazorpaySyncStateModel).order_by(RazorpaySyncStateModel.resource_type))).all()
     return [{"resource_type": state.resource_type, "status": state.last_status,
              "last_provider_timestamp": state.last_provider_timestamp,
-             "last_run_at": state.last_run_at} for state in states]
+             "last_run_at": state.last_run_at, "records_fetched": state.records_fetched,
+             "records_created": state.records_created, "records_updated": state.records_updated,
+             "duplicates_ignored": state.duplicates_ignored,
+             "last_error": state.last_error} for state in states]
 
 
 # READ-ONLY endpoints

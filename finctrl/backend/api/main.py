@@ -5,6 +5,7 @@ from finctrl.backend.api.routes import router
 from finctrl.backend.middleware import CorrelationIDMiddleware
 from finctrl.backend.logging_config import setup_logging
 from finctrl.backend.config import settings
+from fastapi.middleware.cors import CORSMiddleware
 
 # Setup structured logging
 setup_logging(level="INFO")
@@ -27,6 +28,13 @@ app = FastAPI(
 
 # Add correlation ID middleware
 app.add_middleware(CorrelationIDMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "X-Correlation-ID", "Content-Type"],
+)
 
 # Include routes
 app.include_router(router)

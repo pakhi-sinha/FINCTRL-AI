@@ -1,0 +1,10 @@
+export type ForecastPoint={date:string;net:number};
+export type HistoryPoint=ForecastPoint&{inflow:number;outflow:number};
+export type ForecastCurrency={historical:HistoryPoint[];forecast:ForecastPoint[];totals:{historical_inflow:number;historical_outflow:number;historical_net:number;forecast_net:number};forecast_available:boolean;unavailable_reason:string|null};
+export type Forecast={generated_at:string;from_ts:number;to_ts:number;horizon_days:number;method:string;methodology:string;source:{record_count:number;calendar_days:number;populated_days:number;currency_assumption:string};currencies:Record<string,ForecastCurrency>};
+export type Metrics={records_reconciled:number;candidates_created:number;open_exceptions_by_severity:Record<string,number>};
+export type ExceptionItem={id:string;exception_key:string;exception_type:string;status:string;severity:string;description:string;created_at:string};
+export type Investigation={status:string;approval:null|{status:string};created_at:string};
+export type Run={id:string;status:string;requested_at:string;completed_at:string|null;matches_created:number;candidates_created:number;exceptions_created:number};
+export type SyncState={resource_type:string;status:string;last_provider_timestamp:number|null;last_run_at:string|null;records_fetched?:number;records_created?:number;records_updated?:number};
+export type DashboardData={forecast:Forecast;metrics:Metrics;exceptions:ExceptionItem[];investigations:Investigation[];runs:Run[];sync:SyncState[]};

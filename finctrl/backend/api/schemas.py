@@ -171,3 +171,34 @@ class ExceptionResolutionRequest(BaseModel):
 class InvestigationDecisionRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
     correlation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class CashHistoryPoint(BaseModel):
+    date: str
+    inflow: int
+    outflow: int
+    net: int
+
+
+class CashForecastPoint(BaseModel):
+    date: str
+    net: int
+
+
+class CashForecastCurrency(BaseModel):
+    historical: List[CashHistoryPoint]
+    forecast: List[CashForecastPoint]
+    totals: dict[str, int]
+    forecast_available: bool
+    unavailable_reason: Optional[str]
+
+
+class CashForecastResponse(BaseModel):
+    generated_at: datetime
+    from_ts: int
+    to_ts: int
+    horizon_days: int
+    method: str
+    methodology: str
+    source: dict[str, Any]
+    currencies: dict[str, CashForecastCurrency]
