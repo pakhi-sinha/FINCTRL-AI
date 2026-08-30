@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # API Security
     ADMIN_API_KEY: Optional[str] = None
     READ_ONLY_API_KEY: Optional[str] = None
+    CORS_ORIGINS: str = "http://localhost:5173"
 
     # AI Provider
     AI_PROVIDER: str = "gemini"

@@ -45,6 +45,24 @@ A production-ready financial reconciliation system that automatically matches tr
 
 ## Quick Start
 
+### Operational dashboard
+
+The Phase 6E React/TypeScript dashboard lives in `frontend/` and uses the existing
+`X-API-Key` authentication contract.
+
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Use `npm test` and `npm run build` for validation. `VITE_API_BASE_URL` is the only
+required browser configuration; never place backend, Razorpay, Gemini, or
+OpenRouter credentials in `VITE_*` variables. API keys are entered at runtime.
+The backend allows `http://localhost:5173` by default; configure comma-separated
+`CORS_ORIGINS` for other deployments.
+
 ### Prerequisites
 
 - Python 3.12+
