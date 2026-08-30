@@ -33,6 +33,8 @@ from finctrl.backend.database.models import (
     RazorpaySyncStateModel,
     ReconciliationRunModel,
     ReconciliationPeriodModel,
+    AIInvestigationModel,
+    AIInvestigationApprovalModel,
 )
 from finctrl.backend.api.schemas import (
     HealthCheckResponse,
@@ -49,6 +51,7 @@ from finctrl.backend.api.schemas import (
     ReconciliationRunResponse,
     ReconciliationStageRunResponse,
     ReconciliationPeriodResponse,
+    InvestigationDecisionRequest,
 )
 from finctrl.backend.reconciliation.run_control import ReconciliationRunService
 from finctrl.backend.reconciliation.reporting import ReconciliationReportingService
@@ -59,6 +62,7 @@ from finctrl.backend.integrations.razorpay.sync import RazorpaySyncService
 from finctrl.backend.api.cash_position_schema import CashPositionResponse
 from finctrl.backend.api.metrics_schema import MetricsResponse
 from finctrl.backend.engine.ai.agent import AIAgent
+from finctrl.backend.reconciliation.investigation import InvestigationService, InvestigationProviderError
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 
@@ -584,6 +588,90 @@ async def _get_exception_or_404(db: AsyncSession, exception_id: str):
     if exception is None:
         raise HTTPException(status_code=404, detail="Exception not found")
     return exception
+
+
+def _investigation_response(item, approval=None):
+    return {
+        "investigation_id": str(item.id), "exception_id": str(item.exception_id),
+        "provider": item.provider, "model": item.model, "status": item.status,
+        "classification": item.classification, "root_cause": item.root_cause,
+        "summary": item.summary, "recommended_action": item.recommended_action,
+        "confidence": item.confidence / 10000 if item.confidence is not None else None,
+        "evidence_references": item.evidence_references,
+        "requires_human_approval": bool(item.requires_human_approval),
+        "created_at": item.created_at, "started_at": item.started_at, "completed_at": item.completed_at,
+        "input_hash": item.input_hash, "result_hash": item.result_hash,
+        "failure_code": item.failure_code,
+        "approval": None if approval is None else {
+            "status": approval.status, "actor": approval.actor, "decision_at": approval.decision_at,
+            "reason": approval.reason, "correlation_id": approval.correlation_id,
+        },
+    }
+
+
+async def _get_investigation_or_404(db, investigation_id):
+    try:
+        parsed = UUID(investigation_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    item = await db.get(AIInvestigationModel, parsed)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    return item
+
+
+async def _approval_for(db, investigation_id):
+    return await db.scalar(select(AIInvestigationApprovalModel).where(
+        AIInvestigationApprovalModel.investigation_id == investigation_id))
+
+
+@router.post("/reconciliation/exceptions/{exception_id}/investigations", response_model=dict)
+async def create_exception_investigation(exception_id: str, request: Request,
+                                         db: AsyncSession = Depends(get_db_session),
+                                         actor: str = Depends(require_admin)):
+    exception = await _get_exception_or_404(db, exception_id)
+    correlation_id = request.headers.get("X-Correlation-ID")
+    try:
+        item = await InvestigationService(db).create(exception, actor, correlation_id)
+    except InvestigationProviderError:
+        raise HTTPException(status_code=503, detail="AI investigation service is unavailable")
+    return _investigation_response(item, await _approval_for(db, item.id))
+
+
+@router.get("/reconciliation/exceptions/{exception_id}/investigations", response_model=List[dict], dependencies=[Depends(require_read_only)])
+async def list_exception_investigations(exception_id: str, db: AsyncSession = Depends(get_db_session)):
+    exception = await _get_exception_or_404(db, exception_id)
+    items = (await db.scalars(select(AIInvestigationModel).where(
+        AIInvestigationModel.exception_id == exception.id).order_by(AIInvestigationModel.created_at))).all()
+    return [_investigation_response(item, await _approval_for(db, item.id)) for item in items]
+
+
+@router.get("/reconciliation/investigations/{investigation_id}", response_model=dict, dependencies=[Depends(require_read_only)])
+async def get_ai_investigation(investigation_id: str, db: AsyncSession = Depends(get_db_session)):
+    item = await _get_investigation_or_404(db, investigation_id)
+    return _investigation_response(item, await _approval_for(db, item.id))
+
+
+async def _decide_investigation(investigation_id, decision, request, actor, db):
+    item = await _get_investigation_or_404(db, investigation_id)
+    try:
+        approval = await InvestigationService(db).decide(
+            item, decision, actor, request.reason, request.correlation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return _investigation_response(item, approval)
+
+
+@router.post("/reconciliation/investigations/{investigation_id}/approve", response_model=dict)
+async def approve_ai_investigation(investigation_id: str, request: InvestigationDecisionRequest,
+                                   db: AsyncSession = Depends(get_db_session), actor: str = Depends(require_admin)):
+    return await _decide_investigation(investigation_id, "APPROVED", request, actor, db)
+
+
+@router.post("/reconciliation/investigations/{investigation_id}/reject", response_model=dict)
+async def reject_ai_investigation(investigation_id: str, request: InvestigationDecisionRequest,
+                                  db: AsyncSession = Depends(get_db_session), actor: str = Depends(require_admin)):
+    return await _decide_investigation(investigation_id, "REJECTED", request, actor, db)
 
 
 @router.get("/exceptions", response_model=List[ReconciliationExceptionResponse], dependencies=[Depends(require_read_only)])

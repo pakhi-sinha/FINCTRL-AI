@@ -4,15 +4,34 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from typing import Any
 import os
 
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, CheckConstraint, event, inspect
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+
+class UTCDateTime(TypeDecorator):
+    """Persist UTC and restore timezone information on dialects such as SQLite."""
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("UTCDateTime requires a timezone-aware value")
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 # If using SQLite for testing, we must fall back to generic JSON
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -322,6 +341,53 @@ class AuditLogModel(Base):
     actor = Column(String, nullable=False, default="SYSTEM")
     timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)
     changes = Column(JSONType, nullable=False)
+
+
+class AIInvestigationModel(Base):
+    __tablename__ = "ai_investigations"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    exception_id = _uuid_col(ForeignKey("reconciliation_exceptions.id"), nullable=False, index=True)
+    request_key = Column(String(64), nullable=False, unique=True)
+    provider = Column(String(32), nullable=False)
+    model = Column(String(128), nullable=False)
+    status = Column(String(16), nullable=False, default="REQUESTED", index=True)
+    classification = Column(String(64), nullable=True)
+    root_cause = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    recommended_action = Column(String(64), nullable=True)
+    confidence = Column(Integer, nullable=True)  # basis points, 0..10000
+    evidence_references = Column(JSONType, nullable=False, default=list)
+    requires_human_approval = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    started_at = Column(UTCDateTime(), nullable=True)
+    completed_at = Column(UTCDateTime(), nullable=True)
+    input_hash = Column(String(64), nullable=False)
+    result_hash = Column(String(64), nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    requested_by = Column(String, nullable=False)
+    correlation_id = Column(String, nullable=True, index=True)
+    __table_args__ = (
+        CheckConstraint("status IN ('REQUESTED','RUNNING','COMPLETED','FAILED')", name="ck_ai_investigation_status"),
+        CheckConstraint("confidence IS NULL OR (confidence >= 0 AND confidence <= 10000)", name="ck_ai_investigation_confidence"),
+        CheckConstraint("requires_human_approval = 1", name="ck_ai_investigation_human_approval"),
+    )
+
+
+class AIInvestigationApprovalModel(Base):
+    __tablename__ = "ai_investigation_approvals"
+
+    id = _uuid_col(primary_key=True, default=get_uuid)
+    investigation_id = _uuid_col(ForeignKey("ai_investigations.id"), nullable=False, unique=True, index=True)
+    status = Column(String(16), nullable=False, default="PENDING")
+    actor = Column(String, nullable=True)
+    decision_at = Column(UTCDateTime(), nullable=True)
+    reason = Column(Text, nullable=True)
+    correlation_id = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDING','APPROVED','REJECTED')", name="ck_ai_approval_status"),
+    )
 
 
 class RazorpaySyncStateModel(Base):

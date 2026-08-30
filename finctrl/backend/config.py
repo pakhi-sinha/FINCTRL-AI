@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     READ_ONLY_API_KEY: Optional[str] = None
 
     # AI Provider
-    AI_PROVIDER: str = "openrouter"
+    AI_PROVIDER: str = "gemini"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_MODEL: str = "openrouter/free"
     OPENAI_API_KEY: Optional[str] = None
@@ -53,7 +55,11 @@ class Settings(BaseSettings):
         if not self.RAZORPAY_KEY_SECRET:
             errors.append("RAZORPAY_KEY_SECRET is required in production mode")
 
-        # AI Provider: Only require OPENAI_API_KEY if using OpenAI
+        if self.AI_PROVIDER == "gemini" and not self.GEMINI_API_KEY:
+            errors.append("GEMINI_API_KEY is required when AI_PROVIDER=gemini")
+        if self.AI_PROVIDER == "openrouter" and not self.OPENROUTER_API_KEY:
+            errors.append("OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter")
+        # Legacy candidate investigation provider.
         if self.AI_PROVIDER == "openai" and not self.OPENAI_API_KEY:
             errors.append("OPENAI_API_KEY is required when AI_PROVIDER=openai")
 
