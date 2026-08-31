@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from typing import List
 from datetime import datetime
@@ -55,7 +55,10 @@ from finctrl.backend.api.schemas import (
     CashForecastResponse,
 )
 from finctrl.backend.reconciliation.run_control import ReconciliationRunService
-from finctrl.backend.reconciliation.reporting import ReconciliationReportingService
+from finctrl.backend.reconciliation.reporting import (
+    ClosedPeriodViolation, ReconciliationReportingService,
+    assert_timestamps_not_closed,
+)
 from finctrl.backend.reconciliation.workbench import transition_exception
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 from finctrl.backend.integrations.razorpay.client import RazorpayConnectorError
@@ -70,6 +73,7 @@ from sqlalchemy import func
 
 router = APIRouter()
 _webhook_locks: dict[str, asyncio.Lock] = {}
+MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 
 @router.get("/forecast/cash", response_model=CashForecastResponse, dependencies=[Depends(require_read_only)])
@@ -106,14 +110,30 @@ async def health_check():
 
 
 @router.get("/ready", response_model=HealthCheckResponse)
-async def readiness_check():
+async def readiness_check(db: AsyncSession = Depends(get_db_session)):
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database not ready")
     return {"status": "ready"}
 
 
 # Webhook endpoint - uses Razorpay signature verification only, not X-API-Key
 @router.post("/webhooks/razorpay")
 async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_session)):
-    body_bytes = await request.body()
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_WEBHOOK_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="Webhook payload too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="Webhook payload too large")
+    body_bytes = bytes(body)
     signature = request.headers.get("x-razorpay-signature")
     event_id = request.headers.get("x-razorpay-event-id")
 
@@ -123,10 +143,10 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
     if not event_id:
         raise HTTPException(status_code=400, detail="Missing event ID")
 
-    if not settings.RAZORPAY_KEY_SECRET:
+    if not settings.RAZORPAY_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="Webhook secret not configured")
 
-    if not verify_signature(body_bytes, signature, settings.RAZORPAY_KEY_SECRET):
+    if not verify_signature(body_bytes, signature, settings.RAZORPAY_WEBHOOK_SECRET):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
@@ -141,7 +161,10 @@ async def razorpay_webhook(request: Request, db: AsyncSession = Depends(get_db_s
                 body_bytes, signature, event_id
             )
             if error:
-                status_code = 409 if error == "Event ID payload conflict" else 500
+                status_code = 409 if error in {
+                    "Event ID payload conflict", "Provider identity conflict",
+                    "Webhook processing already in progress",
+                } else 500
                 detail = error if status_code == 409 else "Processing failed"
                 raise HTTPException(status_code=status_code, detail=detail)
             if already_processed:
@@ -252,6 +275,10 @@ async def _process_razorpay_webhook(
 # ADMIN endpoints - sensitive write operations
 @router.post("/ingest/erp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db_session)):
+    try:
+        await assert_timestamps_not_closed(db, (record.timestamp for record in payload.records), operation="ERP ingestion")
+    except ClosedPeriodViolation as error:
+        raise HTTPException(status_code=409, detail=str(error))
     received = len(payload.records)
     inserted = 0
     skipped = 0
@@ -297,6 +324,10 @@ async def ingest_erp(payload: ERPBatchPayload, db: AsyncSession = Depends(get_db
 
 @router.post("/ingest/rzp", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db_session)):
+    try:
+        await assert_timestamps_not_closed(db, (record.timestamp for record in payload.records), operation="Razorpay ingestion")
+    except ClosedPeriodViolation as error:
+        raise HTTPException(status_code=409, detail=str(error))
     received = len(payload.records)
     inserted = 0
     skipped = 0
@@ -396,6 +427,10 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
 
 @router.post("/ingest/bank", response_model=BulkIngestResponse, dependencies=[Depends(require_admin)])
 async def ingest_bank(payload: BankBatchPayload, db: AsyncSession = Depends(get_db_session)):
+    try:
+        await assert_timestamps_not_closed(db, (record.timestamp for record in payload.records), operation="bank ingestion")
+    except ClosedPeriodViolation as error:
+        raise HTTPException(status_code=409, detail=str(error))
     received = len(payload.records)
     inserted = 0
     skipped = 0
@@ -533,6 +568,18 @@ async def close_reconciliation_period(period_id: str, request: Request,
     try:
         return await ReconciliationReportingService(db).close_period(
             period, actor=actor, correlation_id=request.state.correlation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.post("/reconciliation/periods/{period_id}/reopen", response_model=ReconciliationPeriodResponse)
+async def reopen_reconciliation_period(period_id: str, request: Request, reason: str | None = None,
+                                       actor: str = Depends(require_admin),
+                                       db: AsyncSession = Depends(get_db_session)):
+    period = await _period_or_404(db, period_id)
+    try:
+        return await ReconciliationReportingService(db).reopen_period(
+            period, actor=actor, correlation_id=request.state.correlation_id, reason=reason)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
 
@@ -965,8 +1012,15 @@ async def get_investigation_logs(candidate_id: str, db: AsyncSession = Depends(g
 
 
 # ADMIN-only AI endpoints
+def _require_safe_ai_workflow():
+    if settings.APP_MODE == "production":
+        raise HTTPException(status_code=409,
+            detail="Legacy candidate AI is advisory-only; use the Phase 6D exception investigation workflow")
+
+
 @router.post("/ai/investigate/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_investigate_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
+    _require_safe_ai_workflow()
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "investigation_completed", "candidate_id": candidate_id}
@@ -974,6 +1028,7 @@ async def ai_investigate_candidate(candidate_id: str, db: AsyncSession = Depends
 
 @router.post("/ai/process/{candidate_id}", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_candidate(candidate_id: str, db: AsyncSession = Depends(get_db_session)):
+    _require_safe_ai_workflow()
     agent = AIAgent(db)
     await agent.investigate_candidate(candidate_id)
     return {"status": "processed", "candidate_id": candidate_id}
@@ -981,6 +1036,7 @@ async def ai_process_candidate(candidate_id: str, db: AsyncSession = Depends(get
 
 @router.post("/ai/process-pending", response_model=dict, dependencies=[Depends(require_admin)])
 async def ai_process_pending(db: AsyncSession = Depends(get_db_session)):
+    _require_safe_ai_workflow()
     query = select(ReconciliationCandidateModel).filter_by(status="PENDING_INVESTIGATION").limit(10)
     res = await db.execute(query)
     candidates = res.scalars().all()
@@ -1001,29 +1057,17 @@ async def replay_webhook(event_id: str, db: AsyncSession = Depends(get_db_sessio
     Replay a FAILED webhook event (ADMIN only).
     Only FAILED/retryable events can be replayed.
     """
-    event = await db.execute(select(FinancialEventModel).filter_by(id=UUID(event_id)))
-    event = event.scalar_one_or_none()
-
-    if not event:
+    try:
+        parsed_event_id = UUID(event_id)
+    except ValueError:
         raise HTTPException(status_code=404, detail="Event not found")
-
-    if event.processing_status != "FAILED":
-        raise HTTPException(status_code=400, detail="Only FAILED events can be replayed")
-
-    if event.attempt_count >= 5:  # Max retry attempts
-        raise HTTPException(status_code=400, detail="Max retry attempts exceeded")
-
-    # For now, this just increments attempt_count and sets to PROCESSED
-    # In a real implementation, you would re-process the webhook payload
-    event.attempt_count += 1
-    event.processing_status = "PROCESSED"
-    event.processed_at = datetime.utcnow()
-    event.error_message = None
-
-    await db.commit()
-
-    return {
-        "status": "replay_successful",
-        "event_id": str(event.id),
-        "attempt_count": event.attempt_count
-    }
+    event = await db.get(FinancialEventModel, parsed_event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    success, replayed_id, error = await WebhookProcessor(db).replay_event(str(parsed_event_id))
+    if not success:
+        status_code = 400 if error in {"Only FAILED events can be replayed", "Max retry attempts (5) exceeded"} else 500
+        raise HTTPException(status_code=status_code, detail=error if status_code == 400 else "Replay failed")
+    replayed = await db.get(FinancialEventModel, parsed_event_id)
+    return {"status": "replay_successful", "event_id": replayed_id,
+            "attempt_count": replayed.attempt_count}

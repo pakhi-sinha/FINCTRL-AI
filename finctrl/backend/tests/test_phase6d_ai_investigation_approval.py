@@ -159,9 +159,14 @@ async def test_provider_failure_is_distinct_and_unexpected_errors_propagate(monk
             await module.InvestigationService(
                 db, StubProvider(failure=True)
             ).create(exception, "ADMIN", None)
-        assert await db.scalar(select(func.count(AIInvestigationModel.id))) == 1
         item = await db.scalar(select(AIInvestigationModel))
-        assert item.status == "RUNNING" and item.failure_code is None
+        assert item.status == "FAILED"
+        assert item.failure_code == "UNEXPECTED_FAILURE"
+        assert item.completed_at is not None
+        failure_audit = await db.scalar(select(AuditLogModel).where(
+            AuditLogModel.action == "INVESTIGATION_FAILED"))
+        assert failure_audit.changes["failure_code"] == "UNEXPECTED_FAILURE"
+        assert await db.scalar(select(func.count(AIInvestigationModel.id))) == 1
 
 
 @pytest.mark.asyncio

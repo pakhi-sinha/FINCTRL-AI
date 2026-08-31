@@ -29,6 +29,7 @@ from finctrl.backend.reconciliation.workbench import (
     _upsert_exception,
     provider_timestamp_utc,
     run_exception_workbench,
+    transition_exception,
 )
 
 
@@ -288,6 +289,41 @@ async def test_concurrent_exception_upsert_recovers_unique_key_race(tmp_path):
         assert await db.scalar(select(func.count(ReconciliationExceptionModel.id))) == 1
         assert await db.scalar(select(func.count(ExceptionEvidenceModel.id))) == 1
     assert sorted(created) == [False, True]
+    await race_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_exception_transitions_have_one_database_winner(tmp_path):
+    database_path = (tmp_path / "exception-transition-race.db").as_posix()
+    race_engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    race_sessions = async_sessionmaker(race_engine, class_=AsyncSession, expire_on_commit=False)
+    async with race_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with race_sessions() as db:
+        item = ReconciliationExceptionModel(
+            exception_key="transition-race", exception_type="MISSING_RAZORPAY",
+            severity="HIGH", description="Concurrent transition test", status="OPEN")
+        db.add(item)
+        await db.commit()
+        exception_id = item.id
+
+    async def worker(target):
+        async with race_sessions() as db:
+            item = await db.get(ReconciliationExceptionModel, exception_id)
+            try:
+                await transition_exception(db, item, target, "ADMIN")
+                await db.commit()
+                return target
+            except ValueError:
+                return "CONFLICT"
+
+    outcomes = await asyncio.gather(worker("RESOLVED"), worker("DISMISSED"))
+    async with race_sessions() as db:
+        item = await db.get(ReconciliationExceptionModel, exception_id)
+        audit_count = await db.scalar(select(func.count(ExceptionAuditModel.id)))
+    assert sorted(outcomes) in (["CONFLICT", "DISMISSED"], ["CONFLICT", "RESOLVED"])
+    assert item.status in {"RESOLVED", "DISMISSED"}
+    assert audit_count == 1
     await race_engine.dispose()
 
 

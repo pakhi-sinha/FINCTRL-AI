@@ -1,6 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
 from uuid import UUID
 import hashlib
@@ -26,28 +28,48 @@ from finctrl.backend.reconciliation.workbench import (
     generate_exceptions,
 )
 
-async def get_unresolved_erp(db: AsyncSession) -> List[ERPRecordModel]:
-    result = await db.execute(select(ERPRecordModel).filter(ERPRecordModel.status != "RECONCILED"))
+@dataclass(frozen=True)
+class ReconciliationScope:
+    from_ts: int | None = None
+    to_ts: int | None = None
+
+
+def scoped_select(model, scope: ReconciliationScope | None = None):
+    query = select(model)
+    if scope is None:
+        return query
+    column = model.timestamp if model in {ERPRecordModel, BankRecordModel} else model.created_at_ts
+    if scope.from_ts is not None:
+        lower = datetime.fromtimestamp(scope.from_ts, timezone.utc) if model in {ERPRecordModel, BankRecordModel} else scope.from_ts
+        query = query.where(column >= lower)
+    if scope.to_ts is not None:
+        upper = datetime.fromtimestamp(scope.to_ts, timezone.utc) if model in {ERPRecordModel, BankRecordModel} else scope.to_ts
+        query = query.where(column <= upper)
+    return query
+
+
+async def get_unresolved_erp(db: AsyncSession, scope=None) -> List[ERPRecordModel]:
+    result = await db.execute(scoped_select(ERPRecordModel, scope).where(ERPRecordModel.status != "RECONCILED"))
     return list(result.scalars().all())
 
-async def get_unresolved_rzp_orders(db: AsyncSession) -> List[RazorpayOrderModel]:
-    result = await db.execute(select(RazorpayOrderModel))
+async def get_unresolved_rzp_orders(db: AsyncSession, scope=None) -> List[RazorpayOrderModel]:
+    result = await db.execute(scoped_select(RazorpayOrderModel, scope))
     return list(result.scalars().all())
 
-async def get_unresolved_rzp_payments(db: AsyncSession) -> List[RazorpayPaymentModel]:
-    result = await db.execute(select(RazorpayPaymentModel).filter(RazorpayPaymentModel.reconciliation_status != "RECONCILED"))
+async def get_unresolved_rzp_payments(db: AsyncSession, scope=None) -> List[RazorpayPaymentModel]:
+    result = await db.execute(scoped_select(RazorpayPaymentModel, scope).where(RazorpayPaymentModel.reconciliation_status != "RECONCILED"))
     return list(result.scalars().all())
 
-async def get_unresolved_rzp_settlements(db: AsyncSession) -> List[RazorpaySettlementModel]:
-    result = await db.execute(select(RazorpaySettlementModel).filter(RazorpaySettlementModel.reconciliation_status != "RECONCILED"))
+async def get_unresolved_rzp_settlements(db: AsyncSession, scope=None) -> List[RazorpaySettlementModel]:
+    result = await db.execute(scoped_select(RazorpaySettlementModel, scope).where(RazorpaySettlementModel.reconciliation_status != "RECONCILED"))
     return list(result.scalars().all())
 
-async def get_unresolved_rzp_refunds(db: AsyncSession) -> List[RazorpayRefundModel]:
-    result = await db.execute(select(RazorpayRefundModel).filter(RazorpayRefundModel.reconciliation_status != "RECONCILED"))
+async def get_unresolved_rzp_refunds(db: AsyncSession, scope=None) -> List[RazorpayRefundModel]:
+    result = await db.execute(scoped_select(RazorpayRefundModel, scope).where(RazorpayRefundModel.reconciliation_status != "RECONCILED"))
     return list(result.scalars().all())
 
-async def get_unresolved_bank(db: AsyncSession) -> List[BankRecordModel]:
-    result = await db.execute(select(BankRecordModel).filter(BankRecordModel.status != "RECONCILED"))
+async def get_unresolved_bank(db: AsyncSession, scope=None) -> List[BankRecordModel]:
+    result = await db.execute(scoped_select(BankRecordModel, scope).where(BankRecordModel.status != "RECONCILED"))
     return list(result.scalars().all())
 
 def _source_id(record) -> str:
@@ -97,12 +119,12 @@ def create_exception(db: AsyncSession, record_type: str, record_id: UUID, anomal
     return exc
 
 
-async def stage_a_exact_match(db: AsyncSession) -> int:
+async def stage_a_exact_match(db: AsyncSession, scope=None) -> int:
     matches_created = 0
-    erp_records = await get_unresolved_erp(db)
-    payments = await get_unresolved_rzp_payments(db)
-    orders = await get_unresolved_rzp_orders(db)
-    bank_records = await get_unresolved_bank(db)
+    erp_records = await get_unresolved_erp(db, scope)
+    payments = await get_unresolved_rzp_payments(db, scope)
+    orders = await get_unresolved_rzp_orders(db, scope)
+    bank_records = await get_unresolved_bank(db, scope)
 
     order_map = {o.rzp_order_id: o for o in orders if o.rzp_order_id}
 
@@ -150,9 +172,9 @@ async def stage_a_exact_match(db: AsyncSession) -> int:
 
 
 
-async def stage_b_payment_arithmetic(db: AsyncSession) -> int:
+async def stage_b_payment_arithmetic(db: AsyncSession, scope=None) -> int:
     exceptions_created = 0
-    payments = await get_unresolved_rzp_payments(db)
+    payments = await get_unresolved_rzp_payments(db, scope)
 
     for pm in payments:
         if pm.amount is not None:
@@ -173,22 +195,22 @@ async def stage_b_payment_arithmetic(db: AsyncSession) -> int:
     return exceptions_created
 
 
-async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]:
+async def stage_c_settlement_reconciliation(db: AsyncSession, scope=None) -> Tuple[int, int]:
     matches_created = 0
     exceptions_created = 0
 
-    settlements = await get_unresolved_rzp_settlements(db)
-    bank_records = await get_unresolved_bank(db)
+    settlements = await get_unresolved_rzp_settlements(db, scope)
+    bank_records = await get_unresolved_bank(db, scope)
 
     # We need ALL payments (even if resolved by Stage A) to calculate the settlement net correctly
-    result = await db.execute(select(RazorpayPaymentModel))
+    result = await db.execute(scoped_select(RazorpayPaymentModel, scope))
     payments = list(result.scalars().all())
 
     # Re-fetch ERP records in case we need to match them or mark them
-    result_erp = await db.execute(select(ERPRecordModel))
+    result_erp = await db.execute(scoped_select(ERPRecordModel, scope))
     erp_records = list(result_erp.scalars().all())
 
-    result_orders = await db.execute(select(RazorpayOrderModel))
+    result_orders = await db.execute(scoped_select(RazorpayOrderModel, scope))
     orders = list(result_orders.scalars().all())
 
     erp_by_ref = {e.reference_id: e for e in erp_records}
@@ -237,7 +259,7 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
 
         # Get refunds for all linked payments to explicitly determine applicable ones based on timestamps.
         # MUST include all refunds, not just unresolved ones, to maintain idempotency regardless of Stage D execution state.
-        result_refunds = await db.execute(select(RazorpayRefundModel))
+        result_refunds = await db.execute(scoped_select(RazorpayRefundModel, scope))
         refunds = list(result_refunds.scalars().all())
 
         calculated_net = 0
@@ -303,13 +325,13 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
     return matches_created, exceptions_created
 
 
-async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, int]:
+async def stage_d_refund_aware_reconciliation(db: AsyncSession, scope=None) -> Tuple[int, int]:
     matches_created = 0
     exceptions_created = 0
 
-    refunds = await get_unresolved_rzp_refunds(db)
+    refunds = await get_unresolved_rzp_refunds(db, scope)
     # We may need to find payments even if they are reconciled (e.g. refund after settlement)
-    result = await db.execute(select(RazorpayPaymentModel))
+    result = await db.execute(scoped_select(RazorpayPaymentModel, scope))
     payments = list(result.scalars().all())
 
     payment_map = {pm.rzp_payment_id: pm for pm in payments}
@@ -376,13 +398,13 @@ async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, in
     return matches_created, exceptions_created
 
 
-async def stage_d_consolidated_legacy_refunds(db: AsyncSession) -> Tuple[int, int]:
+async def stage_d_consolidated_legacy_refunds(db: AsyncSession, scope=None) -> Tuple[int, int]:
     """Reconcile refund batches imported through the typed legacy contract."""
-    refunds = await get_unresolved_rzp_refunds(db)
+    refunds = await get_unresolved_rzp_refunds(db, scope)
     events = {event.id: event for event in (await db.scalars(select(FinancialEventModel))).all()}
-    erps = list((await db.scalars(select(ERPRecordModel).where(
+    erps = list((await db.scalars(scoped_select(ERPRecordModel, scope).where(
         ERPRecordModel.status != "RECONCILED"))).all())
-    banks = await get_unresolved_bank(db)
+    banks = await get_unresolved_bank(db, scope)
     erp_by_ref = {erp.reference_id: erp for erp in erps}
     grouped = defaultdict(list)
 
@@ -440,12 +462,12 @@ async def stage_d_consolidated_legacy_refunds(db: AsyncSession) -> Tuple[int, in
         matches_created += 1
 
     return matches_created, exceptions_created
-async def generate_candidates(db: AsyncSession) -> int:
+async def generate_candidates(db: AsyncSession, scope=None) -> int:
     """Phase 6A amount-based candidate path, enriched with Phase 6B metadata."""
     candidates_created = 0
 
-    erp_records = await get_unresolved_erp(db)
-    payments = await get_unresolved_rzp_payments(db)
+    erp_records = await get_unresolved_erp(db, scope)
+    payments = await get_unresolved_rzp_payments(db, scope)
 
     # Phase 6A candidate behavior: same amount remains an investigative
     # candidate and never becomes a reconciliation match automatically.
@@ -483,11 +505,11 @@ async def generate_candidates(db: AsyncSession) -> int:
     return candidates_created
 
 
-async def stage_e_candidates_and_exceptions(db: AsyncSession) -> Tuple[int, int]:
+async def stage_e_candidates_and_exceptions(db: AsyncSession, scope=None) -> Tuple[int, int]:
     """Run the existing Phase 6A candidate and Phase 6B workbench paths."""
-    candidates = await generate_candidates(db)
-    additional_candidates = await generate_workbench_candidates(db)
-    exceptions = await generate_exceptions(db)
+    candidates = await generate_candidates(db, scope)
+    additional_candidates = await generate_workbench_candidates(db, scope)
+    exceptions = await generate_exceptions(db, scope)
     return candidates + len(additional_candidates), exceptions
 
 

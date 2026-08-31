@@ -7,11 +7,11 @@ JSONType = JSON().with_variant(JSONB, "postgresql")
 from datetime import datetime, timezone
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from typing import Any
-import os
 
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, CheckConstraint, event, inspect
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import declarative_base, relationship
+from finctrl.backend.config import settings
 
 Base = declarative_base()
 
@@ -34,7 +34,7 @@ class UTCDateTime(TypeDecorator):
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 # If using SQLite for testing, we must fall back to generic JSON
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = settings.DATABASE_URL
 is_sqlite = DATABASE_URL.startswith("sqlite")
 
 if is_sqlite:
@@ -103,6 +103,10 @@ class FinancialEventModel(Base):
     processing_status = Column(String, nullable=False, default="PENDING")
     attempt_count = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+    lease_owner = Column(String(64), nullable=True, index=True)
+    execution_attempt_id = Column(String(64), nullable=True, index=True)
+    lease_expires_at = Column(UTCDateTime(), nullable=True, index=True)
+    heartbeat_at = Column(UTCDateTime(), nullable=True)
     schema_version = Column(String, nullable=False, default="1.0")
     __table_args__ = (UniqueConstraint('provider', 'provider_event_id', name='uix_provider_event_id'),)
 
@@ -139,7 +143,7 @@ class RazorpayOrderModel(Base):
 
     id = _uuid_col(primary_key=True, default=get_uuid)
     source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
-    rzp_order_id = Column(String, index=True, nullable=False)
+    rzp_order_id = Column(String, index=True, unique=True, nullable=False)
     receipt = Column(String, index=True, nullable=False)
     amount = Column(Integer, nullable=False)
     amount_paid = Column(Integer, nullable=False, default=0)
@@ -155,7 +159,7 @@ class RazorpayPaymentModel(Base):
 
     id = _uuid_col(primary_key=True, default=get_uuid)
     source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
-    rzp_payment_id = Column(String, index=True, nullable=False)
+    rzp_payment_id = Column(String, index=True, unique=True, nullable=False)
     rzp_order_id = Column(String, index=True, nullable=True)
     rzp_settlement_id = Column(String, index=True, nullable=True)
     amount = Column(Integer, nullable=False)
@@ -181,7 +185,7 @@ class RazorpaySettlementModel(Base):
 
     id = _uuid_col(primary_key=True, default=get_uuid)
     source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
-    rzp_settlement_id = Column(String, index=True, nullable=False)
+    rzp_settlement_id = Column(String, index=True, unique=True, nullable=False)
     amount = Column(Integer, nullable=False)
     status = Column(String, nullable=False)
     fees = Column(Integer, nullable=False)
@@ -197,7 +201,7 @@ class RazorpayRefundModel(Base):
 
     id = _uuid_col(primary_key=True, default=get_uuid)
     source_event_id = _uuid_col(ForeignKey("financial_events.id"), nullable=True)
-    rzp_refund_id = Column(String, index=True, nullable=False)
+    rzp_refund_id = Column(String, index=True, unique=True, nullable=False)
     rzp_payment_id = Column(String, index=True, nullable=False)
     amount = Column(Integer, nullable=False)
     currency = Column(String, default="INR", nullable=False)
@@ -367,6 +371,10 @@ class AIInvestigationModel(Base):
     failure_code = Column(String(64), nullable=True)
     requested_by = Column(String, nullable=False)
     correlation_id = Column(String, nullable=True, index=True)
+    lease_owner = Column(String(64), nullable=True, index=True)
+    execution_attempt_id = Column(String(64), nullable=True, index=True)
+    lease_expires_at = Column(UTCDateTime(), nullable=True, index=True)
+    heartbeat_at = Column(UTCDateTime(), nullable=True)
     __table_args__ = (
         CheckConstraint("status IN ('REQUESTED','RUNNING','COMPLETED','FAILED')", name="ck_ai_investigation_status"),
         CheckConstraint("confidence IS NULL OR (confidence >= 0 AND confidence <= 10000)", name="ck_ai_investigation_confidence"),
@@ -431,6 +439,10 @@ class ReconciliationRunModel(Base):
     error_message = Column(Text, nullable=True)
     retry_of_id = _uuid_col(ForeignKey("reconciliation_runs.id"), nullable=True)
     attempt = Column(Integer, nullable=False, default=1)
+    lease_owner = Column(String(64), nullable=True, index=True)
+    execution_attempt_id = Column(String(64), nullable=True, index=True)
+    lease_expires_at = Column(UTCDateTime(), nullable=True, index=True)
+    heartbeat_at = Column(UTCDateTime(), nullable=True)
 
     stages = relationship("ReconciliationStageRunModel", back_populates="run", cascade="all, delete-orphan")
     __table_args__ = (

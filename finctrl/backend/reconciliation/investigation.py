@@ -10,12 +10,13 @@ from typing import Literal
 from urllib import request as urlrequest
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from finctrl.backend.config import settings
+from finctrl.backend.database.database import async_session_maker
 from finctrl.backend.database.models import (
     AIInvestigationApprovalModel, AIInvestigationModel, AuditLogModel,
     BankRecordModel, ERPRecordModel, ExceptionEvidenceModel, FinancialEventModel,
@@ -23,6 +24,7 @@ from finctrl.backend.database.models import (
     RazorpaySettlementModel, ReconciliationCandidateModel,
     ReconciliationExceptionModel, ReconciliationMatchModel,
 )
+from finctrl.backend.recovery.leases import Lease, claim, db_now, heartbeat_loop, owned
 
 
 class InvestigationResult(BaseModel):
@@ -173,8 +175,10 @@ def _audit(entity_id, action, actor, correlation_id=None, **changes):
 
 
 class InvestigationService:
-    def __init__(self, db: AsyncSession, provider: InvestigationProvider | None = None):
+    def __init__(self, db: AsyncSession, provider: InvestigationProvider | None = None,
+                 session_factory=async_session_maker, worker_id="api"):
         self.db, self.provider = db, provider or get_investigation_provider()
+        self.session_factory, self.worker_id = session_factory, worker_id
 
     async def create(self, exception: ReconciliationExceptionModel, actor: str, correlation_id: str | None):
         payload = await build_case_payload(self.db, exception)
@@ -193,34 +197,104 @@ class InvestigationService:
             await self.db.rollback()
             return await self.db.scalar(select(AIInvestigationModel).where(AIInvestigationModel.request_key == request_key))
         self.db.add(_audit(item.id, "INVESTIGATION_REQUESTED", actor, correlation_id, exception_id=str(exception.id)))
-        item.status, item.started_at = "RUNNING", datetime.now(timezone.utc)
-        self.db.add(_audit(item.id, "INVESTIGATION_STARTED", actor, correlation_id))
         await self.db.commit()
+        return await self._execute(item.id, payload, actor, correlation_id)
+
+    async def _execute(self, investigation_id, payload, actor, correlation_id):
+        lease = Lease.new(self.worker_id)
+        before = await self.db.get(AIInvestigationModel, investigation_id, populate_existing=True)
+        was_takeover = before is not None and before.status == "RUNNING"
+        if not await claim(self.db, AIInvestigationModel, investigation_id, lease,
+                settings.AI_INVESTIGATION_LEASE_SECONDS,
+                eligible_statuses={"REQUESTED"}, active_status="RUNNING"):
+            await self.db.rollback()
+            return await self.db.get(AIInvestigationModel, investigation_id, populate_existing=True)
+        await self.db.execute(update(AIInvestigationModel).where(
+            AIInvestigationModel.id == investigation_id).values(started_at=db_now()))
+        action = "INVESTIGATION_TAKEN_OVER" if was_takeover else "INVESTIGATION_CLAIMED"
+        self.db.add(_audit(investigation_id, action, actor, correlation_id,
+                           attempt_id=lease.attempt_id, owner=lease.owner))
+        self.db.add(_audit(investigation_id, "INVESTIGATION_STARTED", actor, correlation_id,
+                           attempt_id=lease.attempt_id))
+        await self.db.commit()
+        async with heartbeat_loop(self.session_factory, AIInvestigationModel, investigation_id,
+                lease, settings.AI_INVESTIGATION_LEASE_SECONDS,
+                settings.AI_INVESTIGATION_HEARTBEAT_SECONDS, "RUNNING") as ownership_lost:
+            return await self._execute_owned(investigation_id, payload, actor,
+                                             correlation_id, lease, ownership_lost)
+
+    async def _execute_owned(self, investigation_id, payload, actor, correlation_id,
+                             lease, ownership_lost):
         try:
             result = await self.provider.investigate(payload)
             allowed = {entry["reference"] for entry in payload["evidence"]}
             if not set(result.evidence_references).issubset(allowed):
                 raise InvestigationValidationError("AI investigation result failed evidence validation")
             result_dict = result.model_dump()
-            item.status = "COMPLETED"; item.completed_at = datetime.now(timezone.utc)
-            item.classification = result.classification; item.root_cause = result.root_cause
-            item.summary = result.summary; item.recommended_action = result.recommended_action
-            item.confidence = round(result.confidence * 10000); item.evidence_references = result.evidence_references
-            item.result_hash = _canonical_hash(result_dict)
-            self.db.add(AIInvestigationApprovalModel(investigation_id=item.id, correlation_id=correlation_id))
-            self.db.add(_audit(item.id, "INVESTIGATION_COMPLETED", actor, correlation_id, result_hash=item.result_hash))
-            self.db.add(_audit(item.id, "APPROVAL_REQUESTED", actor, correlation_id))
+            result_hash = _canonical_hash(result_dict)
+            if ownership_lost.is_set():
+                raise InvestigationProviderError("Investigation ownership lost")
+            terminal = await self.db.execute(update(AIInvestigationModel).where(
+                owned(AIInvestigationModel, investigation_id, lease, active_status="RUNNING")
+            ).values(status="COMPLETED", completed_at=db_now(),
+                classification=result.classification, root_cause=result.root_cause,
+                summary=result.summary, recommended_action=result.recommended_action,
+                confidence=round(result.confidence * 10000),
+                evidence_references=result.evidence_references, result_hash=result_hash,
+                lease_owner=None, lease_expires_at=None))
+            if terminal.rowcount != 1:
+                await self.db.rollback()
+                return await self.db.get(AIInvestigationModel, investigation_id, populate_existing=True)
+            self.db.add(AIInvestigationApprovalModel(investigation_id=investigation_id, correlation_id=correlation_id))
+            self.db.add(_audit(investigation_id, "INVESTIGATION_COMPLETED", actor, correlation_id,
+                               result_hash=result_hash, attempt_id=lease.attempt_id))
+            self.db.add(_audit(investigation_id, "APPROVAL_REQUESTED", actor, correlation_id))
         except InvestigationProviderError:
-            item.status = "FAILED"; item.completed_at = datetime.now(timezone.utc); item.failure_code = "PROVIDER_FAILURE"
-            self.db.add(_audit(item.id, "INVESTIGATION_FAILED", actor, correlation_id, failure_code=item.failure_code))
+            await self._fail_owned(investigation_id, lease, actor, correlation_id, "PROVIDER_FAILURE")
         except InvestigationValidationError:
-            item.status = "FAILED"; item.completed_at = datetime.now(timezone.utc); item.failure_code = "INVESTIGATION_VALIDATION_FAILURE"
-            self.db.add(_audit(item.id, "INVESTIGATION_FAILED", actor, correlation_id, failure_code=item.failure_code))
+            await self._fail_owned(investigation_id, lease, actor, correlation_id,
+                                   "INVESTIGATION_VALIDATION_FAILURE")
         except Exception:
             await self.db.rollback()
+            await self._fail_owned(investigation_id, lease, actor, correlation_id,
+                                   "UNEXPECTED_FAILURE")
             raise
         await self.db.commit()
-        return item
+        return await self.db.get(AIInvestigationModel, investigation_id, populate_existing=True)
+
+    async def _fail_owned(self, investigation_id, lease, actor, correlation_id, code):
+        terminal = await self.db.execute(update(AIInvestigationModel).where(
+            owned(AIInvestigationModel, investigation_id, lease, active_status="RUNNING")
+        ).values(status="FAILED", completed_at=db_now(), failure_code=code,
+                 lease_owner=None, lease_expires_at=None))
+        if terminal.rowcount == 1:
+            self.db.add(_audit(investigation_id, "INVESTIGATION_FAILED", actor, correlation_id,
+                               failure_code=code, attempt_id=lease.attempt_id))
+            await self.db.commit()
+            return True
+        await self.db.rollback()
+        return False
+
+    async def recover_eligible(self, worker_id, limit=None):
+        limit = limit or settings.RECOVERY_BATCH_SIZE
+        ids = list((await self.db.scalars(select(AIInvestigationModel.id).where(or_(
+            AIInvestigationModel.status == "REQUESTED",
+            (AIInvestigationModel.status == "RUNNING") &
+            (or_(AIInvestigationModel.lease_expires_at.is_(None),
+                 AIInvestigationModel.lease_expires_at <= db_now())),
+        )).order_by(AIInvestigationModel.created_at).limit(limit))).all())
+        recovered = 0
+        for investigation_id in ids:
+            item = await self.db.get(AIInvestigationModel, investigation_id)
+            previous_attempt = item.execution_attempt_id
+            exception = await self.db.scalar(select(ReconciliationExceptionModel).where(
+                ReconciliationExceptionModel.id == item.exception_id).options(
+                    selectinload(ReconciliationExceptionModel.evidence)))
+            payload = await build_case_payload(self.db, exception)
+            self.worker_id = worker_id
+            result = await self._execute(investigation_id, payload, "SYSTEM", item.correlation_id)
+            recovered += int(result.execution_attempt_id != previous_attempt)
+        return recovered
 
     async def decide(self, investigation: AIInvestigationModel, decision: str, actor: str,
                      reason: str | None, correlation_id: str | None):

@@ -27,8 +27,8 @@ def test_production_mode_requires_postgresql():
     test_settings = Settings(
         APP_MODE="production",
         DATABASE_URL="sqlite+aiosqlite:///test.db",
-        ADMIN_API_KEY="admin_key",
-        READ_ONLY_API_KEY="readonly_key",
+        ADMIN_API_KEY="admin_key_1234567890",
+        READ_ONLY_API_KEY="readonly_key_1234567890",
         RAZORPAY_KEY_ID="rzp_test_123",
         RAZORPAY_KEY_SECRET="rzp_secret"
     )
@@ -113,8 +113,10 @@ def test_valid_production_config():
         DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/finctrl",
         ADMIN_API_KEY="admin_key_1234567890",
         READ_ONLY_API_KEY="readonly_key_1234567890",
-        RAZORPAY_KEY_ID="rzp_test_123",
+        RAZORPAY_KEY_ID="rzp_live_123",
         RAZORPAY_KEY_SECRET="rzp_secret_123",
+        RAZORPAY_WEBHOOK_SECRET="webhook_secret_123456",
+        RAZORPAY_MODE="live",
         AI_PROVIDER="openrouter",
         OPENROUTER_API_KEY="or_key_123"
     )
@@ -127,7 +129,7 @@ def test_valid_production_config():
     assert test_settings.DATABASE_URL == "postgresql+asyncpg://postgres:postgres@localhost:5432/finctrl"
     assert test_settings.ADMIN_API_KEY == "admin_key_1234567890"
     assert test_settings.READ_ONLY_API_KEY == "readonly_key_1234567890"
-    assert test_settings.RAZORPAY_KEY_ID == "rzp_test_123"
+    assert test_settings.RAZORPAY_KEY_ID == "rzp_live_123"
     assert test_settings.RAZORPAY_KEY_SECRET == "rzp_secret_123"
     assert test_settings.AI_PROVIDER == "openrouter"
     assert test_settings.OPENROUTER_API_KEY == "or_key_123"
@@ -141,14 +143,51 @@ def test_openrouter_without_openai_key():
     test_settings = Settings(
         APP_MODE="production",
         DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/finctrl",
-        ADMIN_API_KEY="admin_key",
-        READ_ONLY_API_KEY="readonly_key",
-        RAZORPAY_KEY_ID="rzp_test_123",
+        ADMIN_API_KEY="admin_key_1234567890",
+        READ_ONLY_API_KEY="readonly_key_1234567890",
+        RAZORPAY_KEY_ID="rzp_live_123",
         RAZORPAY_KEY_SECRET="rzp_secret",
+        RAZORPAY_WEBHOOK_SECRET="webhook_secret_123456",
+        RAZORPAY_MODE="live",
         AI_PROVIDER="openrouter",
-        OPENROUTER_API_KEY="or_key"
+        OPENROUTER_API_KEY="or_key_1234567890"
     )
 
     # Should not raise SystemExit
     test_settings.validate_production_config()
     assert test_settings.AI_PROVIDER == "openrouter"
+
+
+@pytest.mark.parametrize("admin_key,readonly_key", [
+    ("admin_secret_key_change_me", "readonly_secure_12345"),
+    ("admin_secure_123456", "readonly_secret_key_change_me"),
+    ("short", "readonly_secure_12345"),
+    ("same_secure_key_123", "same_secure_key_123"),
+])
+def test_production_rejects_placeholder_weak_or_equal_api_keys(admin_key, readonly_key):
+    from finctrl.backend.config import Settings
+    configured = Settings(APP_MODE="production",
+        DATABASE_URL="postgresql+asyncpg://db.example/finctrl",
+        ADMIN_API_KEY=admin_key, READ_ONLY_API_KEY=readonly_key,
+        RAZORPAY_MODE="live", RAZORPAY_KEY_ID="rzp_live_example",
+        RAZORPAY_KEY_SECRET="api_secret_123456",
+        RAZORPAY_WEBHOOK_SECRET="webhook_secret_123456",
+        AI_PROVIDER="openrouter", OPENROUTER_API_KEY="provider_key_123456")
+    with pytest.raises(SystemExit):
+        configured.validate_production_config()
+
+
+def test_production_requires_distinct_webhook_secret():
+    from finctrl.backend.config import Settings
+    configured = Settings(APP_MODE="production",
+        DATABASE_URL="postgresql+asyncpg://db.example/finctrl",
+        ADMIN_API_KEY="admin_secure_key_123", READ_ONLY_API_KEY="readonly_secure_key_123",
+        RAZORPAY_MODE="live", RAZORPAY_KEY_ID="rzp_live_example",
+        RAZORPAY_KEY_SECRET="api_secret_123456", RAZORPAY_WEBHOOK_SECRET=None,
+        AI_PROVIDER="openrouter", OPENROUTER_API_KEY="provider_key_123456")
+    with pytest.raises(SystemExit):
+        configured.validate_production_config()
+
+    configured.RAZORPAY_WEBHOOK_SECRET = configured.RAZORPAY_KEY_SECRET
+    with pytest.raises(SystemExit):
+        configured.validate_production_config()

@@ -9,6 +9,7 @@ import time
 import logging
 
 logger = logging.getLogger("finctrl.middleware")
+MAX_CORRELATION_ID_LENGTH = 128
 
 
 class CorrelationIDMiddleware(BaseHTTPMiddleware):
@@ -22,7 +23,8 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Generate or extract correlation ID
-        correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+        supplied = request.headers.get("X-Correlation-ID")
+        correlation_id = supplied if supplied and len(supplied) <= MAX_CORRELATION_ID_LENGTH and supplied.isprintable() else str(uuid.uuid4())
 
         # Store in request state
         request.state.correlation_id = correlation_id

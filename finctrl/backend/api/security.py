@@ -1,6 +1,5 @@
-"""
-API Security - X-API-Key Authentication with RBAC
-"""
+"""API Security - X-API-Key Authentication with RBAC."""
+import secrets
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from typing import Literal
@@ -24,9 +23,9 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> Role:
             detail="Missing X-API-Key header"
         )
 
-    if api_key == settings.ADMIN_API_KEY:
+    if settings.ADMIN_API_KEY and secrets.compare_digest(api_key, settings.ADMIN_API_KEY):
         return "ADMIN"
-    elif api_key == settings.READ_ONLY_API_KEY:
+    elif settings.READ_ONLY_API_KEY and secrets.compare_digest(api_key, settings.READ_ONLY_API_KEY):
         return "READ_ONLY"
     else:
         raise HTTPException(

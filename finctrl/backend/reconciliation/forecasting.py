@@ -10,6 +10,7 @@ from finctrl.backend.database.models import BankRecordModel
 METHOD = "daily_mean_net_cash_v1"
 SUPPORTED_CURRENCIES = {"INR"}
 MAX_HORIZON_DAYS = 365
+MAX_HISTORICAL_DAYS = 366
 
 
 def _utc(value: datetime) -> datetime:
@@ -34,6 +35,9 @@ class CashForecastService:
             raise ValueError(f"Unsupported currency: {selected}")
         start = datetime.fromtimestamp(from_ts, timezone.utc)
         end = datetime.fromtimestamp(to_ts, timezone.utc)
+        day_count = (end.date() - start.date()).days + 1
+        if day_count > MAX_HISTORICAL_DAYS:
+            raise ValueError(f"historical window must not exceed {MAX_HISTORICAL_DAYS} calendar days")
         rows = (await self.db.scalars(select(BankRecordModel).where(
             BankRecordModel.timestamp >= start, BankRecordModel.timestamp <= end,
             BankRecordModel.status.in_(("CLEARED", "RECONCILED", "C")),
@@ -46,7 +50,6 @@ class CashForecastService:
             elif row.type.upper() in {"DEBIT", "DR"}:
                 by_day[day]["outflow"] += abs(row.amount)
         first_day, last_day = start.date(), end.date()
-        day_count = (last_day - first_day).days + 1
         historical = []
         for offset in range(day_count):
             day = (first_day + timedelta(days=offset)).isoformat()

@@ -1,15 +1,12 @@
-import os
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
+from finctrl.backend.config import settings
 from .models import Base
 
 # Default to Postgres config but allow test override
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/finctrl"
-)
+DATABASE_URL = settings.DATABASE_URL
 
 # SQLite in tests requires special config, but main code assumes postgres.
 # If test runner sets SQLite, we adjust.

@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -51,6 +51,20 @@ def provider_timestamp_utc(timestamp: int) -> datetime | None:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else None
 
 
+def _scoped_select(model, scope=None):
+    query = select(model)
+    if scope is None:
+        return query
+    column = model.timestamp if model in {ERPRecordModel, BankRecordModel} else model.created_at_ts
+    if scope.from_ts is not None:
+        lower = datetime.fromtimestamp(scope.from_ts, timezone.utc) if model in {ERPRecordModel, BankRecordModel} else scope.from_ts
+        query = query.where(column >= lower)
+    if scope.to_ts is not None:
+        upper = datetime.fromtimestamp(scope.to_ts, timezone.utc) if model in {ERPRecordModel, BankRecordModel} else scope.to_ts
+        query = query.where(column <= upper)
+    return query
+
+
 def candidate_signals(erp: ERPRecordModel, payment: RazorpayPaymentModel) -> tuple[list[str], int]:
     signals: list[str] = []
     score = 0
@@ -72,9 +86,9 @@ def candidate_signals(erp: ERPRecordModel, payment: RazorpayPaymentModel) -> tup
     return signals, min(score, 100)
 
 
-async def generate_candidates(db: AsyncSession) -> list[ReconciliationCandidateModel]:
-    erps = list((await db.scalars(select(ERPRecordModel).where(ERPRecordModel.status != "RECONCILED"))).all())
-    payments = list((await db.scalars(select(RazorpayPaymentModel).where(
+async def generate_candidates(db: AsyncSession, scope=None) -> list[ReconciliationCandidateModel]:
+    erps = list((await db.scalars(_scoped_select(ERPRecordModel, scope).where(ERPRecordModel.status != "RECONCILED"))).all())
+    payments = list((await db.scalars(_scoped_select(RazorpayPaymentModel, scope).where(
         RazorpayPaymentModel.reconciliation_status != "RECONCILED"
     ))).all())
     created: list[ReconciliationCandidateModel] = []
@@ -150,20 +164,25 @@ async def _upsert_exception(
     return exception, True
 
 
-async def generate_exceptions(db: AsyncSession) -> int:
+async def generate_exceptions(db: AsyncSession, scope=None) -> int:
+    erps = list((await db.scalars(_scoped_select(ERPRecordModel, scope).where(ERPRecordModel.status != "RECONCILED"))).all())
+    payments = list((await db.scalars(_scoped_select(RazorpayPaymentModel, scope).where(
+        RazorpayPaymentModel.reconciliation_status != "RECONCILED"
+    ))).all())
+    source_ids = {str(item.id) for item in [*erps, *payments]}
     candidates = list((await db.scalars(select(ReconciliationCandidateModel).where(
         ReconciliationCandidateModel.status == "PENDING_INVESTIGATION"
     ))).all())
-    erps = list((await db.scalars(select(ERPRecordModel).where(ERPRecordModel.status != "RECONCILED"))).all())
-    payments = list((await db.scalars(select(RazorpayPaymentModel).where(
-        RazorpayPaymentModel.reconciliation_status != "RECONCILED"
-    ))).all())
-    all_payments = list((await db.scalars(select(RazorpayPaymentModel))).all())
+    candidates = [item for item in candidates if
+                  str(item.evidence_payload.get("erp_id")) in source_ids or
+                  str(item.evidence_payload.get("rzp_id")) in source_ids]
+    all_payments = list((await db.scalars(_scoped_select(RazorpayPaymentModel, scope))).all())
     # Reconciled bank rows remain authoritative evidence and must not be hidden
     # from exception evaluation.
-    banks = list((await db.scalars(select(BankRecordModel))).all())
-    settlements = list((await db.scalars(select(RazorpaySettlementModel))).all())
-    refunds = list((await db.scalars(select(RazorpayRefundModel))).all())
+    banks = list((await db.scalars(_scoped_select(BankRecordModel, scope))).all())
+    settlements = list((await db.scalars(_scoped_select(RazorpaySettlementModel, scope))).all())
+    refunds = list((await db.scalars(_scoped_select(RazorpayRefundModel, scope))).all())
+    scoped_rzp_ids = {item.id for item in [*all_payments, *settlements, *refunds]}
     created = 0
     candidates_by_erp: dict[str, list[ReconciliationCandidateModel]] = {}
     for candidate in candidates:
@@ -288,6 +307,8 @@ async def generate_exceptions(db: AsyncSession) -> int:
     }
     rzp_models = (RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel)
     for legacy in legacy_exceptions:
+        if scope is not None and legacy.record_id not in scoped_rzp_ids:
+            continue
         exception_type = legacy_type_map.get(legacy.anomaly_type, "AMOUNT_MISMATCH")
         record = None
         for model in rzp_models:
@@ -305,9 +326,9 @@ async def generate_exceptions(db: AsyncSession) -> int:
     return created
 
 
-async def run_exception_workbench(db: AsyncSession) -> tuple[int, int]:
-    candidates = await generate_candidates(db)
-    exceptions = await generate_exceptions(db)
+async def run_exception_workbench(db: AsyncSession, scope=None) -> tuple[int, int]:
+    candidates = await generate_candidates(db, scope)
+    exceptions = await generate_exceptions(db, scope)
     return len(candidates), exceptions
 
 
@@ -327,13 +348,26 @@ async def transition_exception(
     }
     if new_status not in allowed.get(exception.status, set()):
         raise ValueError(f"Invalid exception transition: {exception.status} -> {new_status}")
+    exception_id = exception.id
     previous = exception.status
-    exception.status = new_status
-    exception.updated_at = datetime.utcnow()
+    values = {"status": new_status, "updated_at": datetime.utcnow()}
     if new_status in TERMINAL_STATUSES:
-        exception.resolved_at = datetime.utcnow()
-        exception.resolution_type = resolution_type or new_status
-        exception.resolution_note = resolution_note
+        values.update(resolved_at=datetime.utcnow(),
+                      resolution_type=resolution_type or new_status,
+                      resolution_note=resolution_note)
+    changed = await db.execute(update(ReconciliationExceptionModel).where(
+        ReconciliationExceptionModel.id == exception_id,
+        ReconciliationExceptionModel.status == previous,
+    ).values(**values))
+    if changed.rowcount != 1:
+        await db.rollback()
+        current = await db.get(ReconciliationExceptionModel, exception_id)
+        if current is not None and current.status == new_status:
+            return
+        current_status = current.status if current is not None else "MISSING"
+        raise ValueError(f"Invalid exception transition: {current_status} -> {new_status}")
+    for key, value in values.items():
+        setattr(exception, key, value)
     db.add(ExceptionAuditModel(
         exception_id=exception.id,
         previous_status=previous,

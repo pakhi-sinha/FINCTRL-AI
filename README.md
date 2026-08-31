@@ -116,8 +116,14 @@ The backend allows `http://localhost:5173` by default; configure comma-separated
    ```bash
    export ADMIN_API_KEY=your_admin_key_here
    export READ_ONLY_API_KEY=your_readonly_key_here
+   export POSTGRES_USER=your_database_user
+   export POSTGRES_PASSWORD=your_database_password
+   export POSTGRES_DB=finctrl
+   export DATABASE_URL=postgresql+asyncpg://your_database_user:your_database_password@postgres:5432/finctrl
+   export RAZORPAY_MODE=live
    export RAZORPAY_KEY_ID=your_razorpay_key
    export RAZORPAY_KEY_SECRET=your_razorpay_secret
+   export RAZORPAY_WEBHOOK_SECRET=your_independent_webhook_secret
    ```
 
 2. **Start services**
@@ -132,6 +138,21 @@ The backend allows `http://localhost:5173` by default; configure comma-separated
 
 ## Configuration
 
+### Durable recovery worker
+
+Production runs a dedicated recovery process alongside the API:
+
+```bash
+python -m finctrl.backend.recovery.worker
+```
+
+The worker performs a bounded startup scan and then polls continuously. Multiple
+instances are safe because PostgreSQL `CURRENT_TIMESTAMP` and conditional
+updates are the ownership authority. Defaults are 10m/2m for reconciliation
+lease/heartbeat, 5m/1m for AI investigation, and 2m/30s for webhook processing.
+Expired ownership is taken over with a new execution-attempt identity; live
+heartbeats extend ownership, and terminal writes are fenced by owner and attempt.
+
 ### Environment Variables
 
 | Variable | Required | Default | Description |
@@ -140,10 +161,11 @@ The backend allows `http://localhost:5173` by default; configure comma-separated
 | `DATABASE_URL` | Production | - | PostgreSQL connection string (e.g., `postgresql+asyncpg://user:pass@host:5432/db`) |
 | `ADMIN_API_KEY` | Production | - | Admin API key for write operations |
 | `READ_ONLY_API_KEY` | Production | - | Read-only API key for read operations |
-| `RAZORPAY_MODE` | No | `test` | Razorpay mode: `test` or `live` |
+| `RAZORPAY_MODE` | Production | `test` | Razorpay mode; production requires `live` and a non-test key ID |
 | `RAZORPAY_KEY_ID` | Production | - | Razorpay API key ID |
-| `RAZORPAY_KEY_SECRET` | Production | - | Razorpay API secret (also used for webhook verification) |
-| `AI_PROVIDER` | No | `gemini` | AI provider: `gemini`, `openrouter`, `openai`, or `mock` |
+| `RAZORPAY_KEY_SECRET` | Production | - | Razorpay outbound API secret |
+| `RAZORPAY_WEBHOOK_SECRET` | Production | - | Independent inbound webhook HMAC secret configured in the Razorpay dashboard |
+| `AI_PROVIDER` | No | `gemini` | AI provider: `gemini`, `openrouter`, or legacy `openai` |
 | `GEMINI_API_KEY` | If using Gemini | - | Gemini API key |
 | `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model name |
 | `OPENROUTER_API_KEY` | If using OpenRouter | - | OpenRouter API key |
@@ -154,8 +176,9 @@ The backend allows `http://localhost:5173` by default; configure comma-separated
 
 In production mode (`APP_MODE=production`), the system **fails fast** if required configuration is missing:
 - `DATABASE_URL` must be a PostgreSQL connection string
-- `ADMIN_API_KEY` and `READ_ONLY_API_KEY` must be set
-- `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` must be set
+- `ADMIN_API_KEY` and `READ_ONLY_API_KEY` must be strong, explicit, non-placeholder, and different
+- `RAZORPAY_MODE=live`, `RAZORPAY_KEY_ID`, and `RAZORPAY_KEY_SECRET` must be set
+- `RAZORPAY_WEBHOOK_SECRET` must be configured separately from API credentials
 
 ### Razorpay Test Mode
 
@@ -168,6 +191,7 @@ For development and testing, you can use Razorpay's test mode:
    export RAZORPAY_MODE=test
    export RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxxxxx
    export RAZORPAY_KEY_SECRET=your_test_secret
+   export RAZORPAY_WEBHOOK_SECRET=your_test_webhook_secret
    ```
 
 Test mode allows you to simulate payments, settlements, and webhooks without real transactions.
