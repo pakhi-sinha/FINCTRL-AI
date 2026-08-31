@@ -15,7 +15,8 @@ from finctrl.backend.database.models import (
     ReconciliationMatchModel,
     MatchEvidenceModel,
     ReconciliationCandidateModel,
-    ExceptionModel
+    ExceptionModel,
+    FinancialEventModel,
 )
 from finctrl.backend.api.schemas import RunReconciliationResponse
 from finctrl.backend.reconciliation.workbench import (
@@ -187,7 +188,11 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
     result_erp = await db.execute(select(ERPRecordModel))
     erp_records = list(result_erp.scalars().all())
 
+    result_orders = await db.execute(select(RazorpayOrderModel))
+    orders = list(result_orders.scalars().all())
+
     erp_by_ref = {e.reference_id: e for e in erp_records}
+    order_by_id = {order.rzp_order_id: order for order in orders}
 
     for sm in settlements:
         actual_settlement_amount = sm.amount
@@ -197,6 +202,36 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
 
         if not linked_payments:
             create_exception(db, "RZP", sm.id, "MISSING_PAYMENTS_FOR_SETTLEMENT", "HIGH")
+            exceptions_created += 1
+            continue
+
+        if len({payment.currency for payment in linked_payments}) != 1:
+            create_exception(db, "RZP", sm.id, "SETTLEMENT_CURRENCY_MISMATCH", "HIGH")
+            exceptions_created += 1
+            continue
+
+        matched_erps = []
+        missing_required_erp = False
+        for payment in linked_payments:
+            direct_erp = erp_by_ref.get(payment.rzp_order_id)
+            if direct_erp is not None:
+                if direct_erp.currency != payment.currency or direct_erp.amount != payment.amount:
+                    missing_required_erp = True
+                    break
+                matched_erps.append(direct_erp)
+                continue
+            order = order_by_id.get(payment.rzp_order_id)
+            if order is None:
+                # Direct provider/bank settlement reconciliation remains an
+                # explicitly supported population when no ERP-linked order fact exists.
+                continue
+            erp = erp_by_ref.get(order.receipt)
+            if erp is None or erp.currency != payment.currency or erp.amount != payment.amount:
+                missing_required_erp = True
+                break
+            matched_erps.append(erp)
+        if missing_required_erp:
+            create_exception(db, "RZP", sm.id, "MISSING_REQUIRED_ERP_FOR_SETTLEMENT", "HIGH")
             exceptions_created += 1
             continue
 
@@ -234,11 +269,6 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
             if bank.amount == actual_settlement_amount and (sm.rzp_settlement_id in bank.description or (sm.utr and sm.utr in bank.transaction_ref)):
                 bank_matched = True
 
-                matched_erps = [
-                    erp_by_ref[p.rzp_order_id]
-                    for p in linked_payments
-                    if p.rzp_order_id and p.rzp_order_id in erp_by_ref
-                ]
                 evidence_records = [("RZP", sm), ("BANK", bank)]
                 evidence_records.extend(("RZP", p) for p in linked_payments)
                 evidence_records.extend(("ERP", e) for e in matched_erps)
@@ -258,11 +288,9 @@ async def stage_c_settlement_reconciliation(db: AsyncSession) -> Tuple[int, int]
                     create_match_evidence(db, match, "RZP", p)
                     await _mark_reconciled(db, RazorpayPaymentModel, p.id, True)
 
-                    # Find ERP
-                    if p.rzp_order_id and p.rzp_order_id in erp_by_ref:
-                        e = erp_by_ref[p.rzp_order_id]
-                        create_match_evidence(db, match, "ERP", e)
-                        await _mark_reconciled(db, ERPRecordModel, e.id)
+                for e in matched_erps:
+                    create_match_evidence(db, match, "ERP", e)
+                    await _mark_reconciled(db, ERPRecordModel, e.id)
 
                 matches_created += 1
                 bank_records.remove(bank)
@@ -346,6 +374,72 @@ async def stage_d_refund_aware_reconciliation(db: AsyncSession) -> Tuple[int, in
             matches_created += 1
 
     return matches_created, exceptions_created
+
+
+async def stage_d_consolidated_legacy_refunds(db: AsyncSession) -> Tuple[int, int]:
+    """Reconcile refund batches imported through the typed legacy contract."""
+    refunds = await get_unresolved_rzp_refunds(db)
+    events = {event.id: event for event in (await db.scalars(select(FinancialEventModel))).all()}
+    erps = list((await db.scalars(select(ERPRecordModel).where(
+        ERPRecordModel.status != "RECONCILED"))).all())
+    banks = await get_unresolved_bank(db)
+    erp_by_ref = {erp.reference_id: erp for erp in erps}
+    grouped = defaultdict(list)
+
+    for refund in refunds:
+        event = events.get(refund.source_event_id)
+        raw = event.raw_payload if event and event.provider == "razorpay_legacy" else None
+        settlement_id = raw.get("rzp_settlement_id") if isinstance(raw, dict) else None
+        if settlement_id and raw.get("type", "").lower() == "refund":
+            grouped[settlement_id].append(refund)
+
+    matches_created = exceptions_created = 0
+    for settlement_id, related_refunds in grouped.items():
+        currencies = {refund.currency for refund in related_refunds}
+        matched_erps = [erp_by_ref.get(refund.receipt) for refund in related_refunds]
+        if len(currencies) != 1 or any(erp is None for erp in matched_erps):
+            for refund in related_refunds:
+                create_exception(db, "RZP", refund.id, "MISSING_OR_MISMATCHED_REFUND_ERP", "HIGH")
+                exceptions_created += 1
+            continue
+        if any(erp.currency != refund.currency or erp.amount != refund.amount
+               for erp, refund in zip(matched_erps, related_refunds)):
+            for refund in related_refunds:
+                create_exception(db, "RZP", refund.id, "REFUND_AMOUNT_MISMATCH", "HIGH")
+                exceptions_created += 1
+            continue
+
+        total = sum(refund.amount for refund in related_refunds)
+        bank_matches = [bank for bank in banks if bank.amount == total and
+                        (settlement_id in bank.transaction_ref or settlement_id in bank.description)]
+        if len(bank_matches) != 1:
+            for refund in related_refunds:
+                create_exception(db, "RZP", refund.id,
+                                 "AMBIGUOUS_REFUND_BANK" if bank_matches else "MISSING_REFUND_BANK", "HIGH")
+                exceptions_created += 1
+            continue
+
+        bank = bank_matches[0]
+        evidence_records = [("RZP", refund) for refund in related_refunds]
+        evidence_records.extend(("ERP", erp) for erp in matched_erps)
+        evidence_records.append(("BANK", bank))
+        match = ReconciliationMatchModel(
+            match_type="REFUND_MATCH",
+            match_key=_match_key("REFUND_MATCH", evidence_records),
+        )
+        db.add(match)
+        await db.flush()
+        for record_type, record in evidence_records:
+            create_match_evidence(db, match, record_type, record)
+        for refund in related_refunds:
+            await _mark_reconciled(db, RazorpayRefundModel, refund.id, True)
+        for erp in matched_erps:
+            await _mark_reconciled(db, ERPRecordModel, erp.id)
+        await _mark_reconciled(db, BankRecordModel, bank.id)
+        banks.remove(bank)
+        matches_created += 1
+
+    return matches_created, exceptions_created
 async def generate_candidates(db: AsyncSession) -> int:
     """Phase 6A amount-based candidate path, enriched with Phase 6B metadata."""
     candidates_created = 0
@@ -415,6 +509,10 @@ async def run_reconciliation(db: AsyncSession) -> RunReconciliationResponse:
     exceptions += e
 
     # Stage D
+    m, e = await stage_d_consolidated_legacy_refunds(db)
+    matches += m
+    exceptions += e
+
     m, e = await stage_d_refund_aware_reconciliation(db)
     matches += m
     exceptions += e
