@@ -12,7 +12,7 @@ A production-ready financial reconciliation system that automatically matches tr
 - **Observability**: Structured JSON logging with correlation IDs for request tracing
 - **Database Migrations**: Alembic-based schema migrations with PostgreSQL (production) and SQLite (test) support
 - **Razorpay Integration**: Official SDK integration with test mode support
-- **AI-Powered Investigation**: OpenRouter/OpenAI integration for complex reconciliation scenarios
+- **AI-Powered Investigation**: Gemini/OpenRouter/OpenAI integration for complex reconciliation scenarios
 - **Docker Support**: Production-ready containerization with docker-compose
 
 ## Architecture
@@ -143,8 +143,11 @@ The backend allows `http://localhost:5173` by default; configure comma-separated
 | `RAZORPAY_MODE` | No | `test` | Razorpay mode: `test` or `live` |
 | `RAZORPAY_KEY_ID` | Production | - | Razorpay API key ID |
 | `RAZORPAY_KEY_SECRET` | Production | - | Razorpay API secret (also used for webhook verification) |
-| `AI_PROVIDER` | No | `openrouter` | AI provider: `openrouter`, `openai`, or `mock` |
+| `AI_PROVIDER` | No | `gemini` | AI provider: `gemini`, `openrouter`, `openai`, or `mock` |
+| `GEMINI_API_KEY` | If using Gemini | - | Gemini API key |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model name |
 | `OPENROUTER_API_KEY` | If using OpenRouter | - | OpenRouter API key |
+| `OPENROUTER_MODEL` | No | `openrouter/free` | OpenRouter model name |
 | `OPENAI_API_KEY` | If using OpenAI | - | OpenAI API key |
 
 ### Production Configuration
@@ -240,6 +243,46 @@ alembic current
 ```
 
 ## Testing
+
+## Final demo and evaluation
+
+FINCTRL uses three fixed evaluation splits: `dev` for debugging, `validation`
+for validation/tuning, and `held_out` as the protected final evaluation corpus.
+Do not edit or regenerate the held-out dataset or oracle to tune production
+behavior.
+
+```bash
+# Validation and final held-out reconciliation evaluation (offline)
+python -m finctrl.backend.evaluation_runner --dataset validation
+python -m finctrl.backend.evaluation_runner --dataset held_out
+
+# Full production check, including deterministic AI/forecast safety tests and UI checks
+python -m finctrl.backend.evaluation_runner --dataset held_out --production-check
+
+# Optional machine-readable report (generated on demand; do not treat as source data)
+python -m finctrl.backend.evaluation_runner --dataset held_out --production-check \
+  --output artifacts/evaluation/production_readiness.json
+```
+
+The report includes dataset hashes and metadata, per-scenario accuracy,
+expected-versus-observed outcomes, stable evidence identifiers, financial
+immutability and idempotency checks, offline Razorpay identity checks, Phase 6D
+safety checks, Phase 6E forecasting invariants, and explicit production gates.
+No accuracy threshold is invented where the project has not defined one.
+
+Reproducible production-style demo:
+
+1. Start the backend with `uvicorn finctrl.backend.api.main:app --host 0.0.0.0 --port 8000`.
+2. Run a validation or held-out evaluation command above to load synthetic authoritative ERP, Razorpay, and bank inputs into its isolated evaluation database and inspect match/candidate/exception results.
+3. Use the API to inspect exception evidence and run the mocked-provider Phase 6D safety path; approval remains isolated from financial facts.
+4. Request `/forecast/cash` with a deterministic window and horizon.
+5. Start the dashboard with `cd frontend && npm install && npm run dev` and enter a runtime READ_ONLY or ADMIN API key.
+6. Review reconciliation health, exceptions, AI approvals, Razorpay sync health, actual cash, and forecast data.
+7. Run the `--production-check` command for the final gates.
+
+Evaluation is offline: it does not call Razorpay, Gemini, or OpenRouter. The
+corpus is synthetic and forecast results are deterministic advisory outputs;
+forecast predictive accuracy is not claimed because no forecast oracle exists.
 
 Run the full test suite:
 

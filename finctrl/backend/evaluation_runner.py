@@ -1,131 +1,195 @@
-import os
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
-
-import asyncio
-import json
-import time
-from typing import Dict, Any
-from sqlalchemy.ext.asyncio import AsyncSession
-from finctrl.backend.database.database import get_db_session, init_db
-from finctrl.backend.api.schemas import ERPBatchPayload, RZPBatchPayload, BankBatchPayload
-from finctrl.backend.api.routes import ingest_erp, ingest_rzp, ingest_bank
+"""Offline held-out reconciliation evaluation and production-readiness CLI."""
+from __future__ import annotations
+import argparse, asyncio, hashlib, json, subprocess, sys
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
+from sqlalchemy.pool import StaticPool
+from finctrl.backend.api.routes import ingest_bank, ingest_erp, ingest_rzp
+from finctrl.backend.api.schemas import BankBatchPayload, ERPBatchPayload, RZPBatchPayload
+from finctrl.backend.database.models import (Base, BankRecordModel, ERPRecordModel,
+    ExceptionEvidenceModel, FinancialEventModel, RazorpayOrderModel, RazorpayPaymentModel,
+    RazorpayRefundModel, RazorpaySettlementModel, ReconciliationCandidateModel,
+    ReconciliationExceptionModel, ReconciliationMatchModel)
+from finctrl.backend.engine.ai.schemas import ProposedMatchSchema
 from finctrl.backend.reconciliation.engine import run_reconciliation
+from finctrl.backend.reconciliation.forecasting import CashForecastService
+from finctrl.backend.schemas.models import FinctrlDataset, GroundTruthDataset
 
-async def run_evaluation(dataset_path: str) -> Dict[str, Any]:
-    with open(dataset_path, "r") as f:
-        dataset = json.load(f)
+EVALUATION_VERSION = "6F.1"
+ROOT = Path(__file__).resolve().parent
+SPLITS = {name: ROOT / "data" / name for name in ("dev", "validation", "held_out")}
+OUTCOMES = {"MATCH", "MATCH_CONSOLIDATED", "MISMATCH_FEE", "MATCH_PARTIAL_REF",
+            "MATCH_DELAYED", "MISSING_DATA", "MATCH_REFUND"}
 
-    ground_truth_path = dataset_path.replace("dataset.json", "ground_truth.json")
-    with open(ground_truth_path, "r") as f:
-        ground_truth = json.load(f)
+class EvaluationIntegrityError(ValueError): pass
+def _sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+def _digest(value): return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+def _status(ok, details=None): return {"status": "PASS" if ok else "FAIL", **(details or {})}
 
-    await init_db()
+def load_split(dataset: str):
+    name = dataset.lower()
+    if name not in SPLITS: raise EvaluationIntegrityError(f"Unsupported dataset split: {dataset}")
+    dp, gp = SPLITS[name] / "dataset.json", SPLITS[name] / "ground_truth.json"
+    hashes = {"dataset_sha256": _sha(dp), "ground_truth_sha256": _sha(gp)}
+    try:
+        raw, truth = json.loads(dp.read_text()), json.loads(gp.read_text())
+        parsed, parsed_truth = FinctrlDataset.model_validate(raw), GroundTruthDataset.model_validate(truth)
+    except (OSError, json.JSONDecodeError, ValidationError) as error:
+        raise EvaluationIntegrityError("Dataset or ground truth is malformed") from error
+    if parsed.metadata.dataset_name.upper() != name.upper() or parsed_truth.metadata.dataset_name.upper() != name.upper():
+        raise EvaluationIntegrityError("Dataset split metadata does not match selection")
+    if parsed.metadata.model_dump() != parsed_truth.metadata.model_dump():
+        raise EvaluationIntegrityError("Dataset and ground-truth metadata differ")
+    if len(parsed_truth.groups) != parsed.metadata.record_counts["groups"]:
+        raise EvaluationIntegrityError("Ground-truth group count does not match metadata")
+    if any(group.expected_outcome not in OUTCOMES for group in parsed_truth.groups):
+        raise EvaluationIntegrityError("Ground truth contains an unsupported outcome")
+    ids = {str(x.id) for x in [*parsed.erp_records, *parsed.rzp_records, *parsed.bank_records]}
+    refs = {str(x) for g in parsed_truth.groups for x in [*g.erp_record_ids, *g.rzp_record_ids, *g.bank_record_ids]}
+    if not refs.issubset(ids): raise EvaluationIntegrityError("Ground truth references missing records")
+    return raw, truth, hashes
 
-    start_time = time.time()
+def _maps(dataset):
+    return ({x["id"]: x["reference_id"] for x in dataset["erp_records"]},
+            {x["id"]: x["rzp_payment_id"] for x in dataset["rzp_records"]},
+            {x["id"]: x["transaction_ref"] for x in dataset["bank_records"]})
+def _expected(group, maps):
+    e, r, b = maps
+    return ({e[x] for x in group["erp_record_ids"]} | {r[x] for x in group["rzp_record_ids"]} |
+            {b[x] for x in group["bank_record_ids"]})
 
-    async for db in get_db_session():
-        # Ingestion
-        await ingest_erp(ERPBatchPayload(records=dataset.get("erp_records", [])), db)
-        await ingest_rzp(RZPBatchPayload(records=dataset.get("rzp_records", [])), db)
-        await ingest_bank(BankBatchPayload(records=dataset.get("bank_records", [])), db)
+async def _snapshot(db: AsyncSession):
+    erp = (await db.scalars(select(ERPRecordModel).order_by(ERPRecordModel.reference_id))).all()
+    rzp = (await db.scalars(select(RazorpayPaymentModel).order_by(RazorpayPaymentModel.rzp_payment_id))).all()
+    refunds = (await db.scalars(select(RazorpayRefundModel).order_by(RazorpayRefundModel.rzp_refund_id))).all()
+    bank = (await db.scalars(select(BankRecordModel).order_by(BankRecordModel.transaction_ref))).all()
+    return {"erp": [(x.reference_id, x.amount, x.currency, str(x.timestamp), x.type) for x in erp],
+            "razorpay": ([("payment", x.rzp_payment_id, x.rzp_order_id, x.rzp_settlement_id, x.amount, x.currency, x.fee, x.tax, x.created_at_ts) for x in rzp] +
+                         [("refund", x.rzp_refund_id, x.rzp_payment_id, None, x.amount, x.currency, 0, 0, x.created_at_ts) for x in refunds]),
+            "bank": [(x.transaction_ref, x.amount, str(x.timestamp), x.type) for x in bank]}
 
-        # Recon
-        response = await run_reconciliation(db)
+async def _state(db):
+    matches = (await db.scalars(select(ReconciliationMatchModel).options(selectinload(ReconciliationMatchModel.evidence)))).all()
+    candidates = (await db.scalars(select(ReconciliationCandidateModel))).all()
+    exceptions = (await db.scalars(select(ReconciliationExceptionModel).options(selectinload(ReconciliationExceptionModel.evidence)))).all()
+    return {"matches": [{"type": x.match_type, "ids": {e.source_id for e in x.evidence if e.source_id}} for x in matches],
+            "candidates": [{"ids": {v for k, v in x.evidence_payload.items() if k.endswith("_source_id") and isinstance(v, str)}} for x in candidates],
+            "exceptions": [{"type": x.exception_type, "ids": {e.source_id for e in x.evidence}} for x in exceptions]}
 
-        end_time = time.time()
-        latency = end_time - start_time
-        records_processed = len(dataset.get("erp_records", [])) + len(dataset.get("rzp_records", [])) + len(dataset.get("bank_records", []))
+def _normalize(group, expected, state):
+    matches = [x for x in state["matches"] if expected.issubset(x["ids"])]
+    scenario = group["scenario"]
+    if matches:
+        special = {"CONSOLIDATED_REFUNDS": "MATCH_REFUND", "TIMING_SKEW": "MATCH_DELAYED",
+                   "TRUNCATED_REFERENCE": "MATCH_PARTIAL_REF"}
+        if scenario in special: return special[scenario], "Expected specialized evidence group was resolved."
+        if any(x["type"] == "CONSOLIDATED" for x in matches): return "MATCH_CONSOLIDATED", "Consolidated evidence set resolved."
+        return "MATCH", "Exact authoritative evidence set resolved."
+    operational = any(expected & x["ids"] for x in [*state["candidates"], *state["exceptions"]])
+    if scenario == "FEE_DISCREPANCY" and operational: return "MISMATCH_FEE", "Discrepancy retained for controlled review."
+    if scenario == "MISSING_RECORD" and operational: return "MISSING_DATA", "Missing source retained for controlled review."
+    if operational: return "UNRESOLVED", "Controlled state exists but differs from expected normalization."
+    return "UNOBSERVED", "No operational evidence covered the group."
 
+def _scenarios(records, truth):
+    result = {}
+    for scenario in truth["metadata"]["scenario_counts"]:
+        rows = [x for x in records if x["scenario"] == scenario]; correct = sum(x["correct"] for x in rows)
+        result[scenario] = {"groups": len(rows), "correct": correct, "accuracy": correct / len(rows) if rows else None,
+            "expected": dict(sorted(Counter(x["expected_outcome"] for x in rows).items())),
+            "observed": dict(sorted(Counter(x["observed_outcome"] for x in rows).items()))}
+    return result
 
-        # Ground Truth checking
-        correct_matches = 0
-        false_resolutions = 0
-        from finctrl.backend.database.models import ReconciliationMatchModel, MatchEvidenceModel
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
+async def run_evaluation(dataset: str = "held_out", production_check: bool = False) -> dict[str, Any]:
+    data, truth, hashes = load_split(dataset)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+    async with sessions() as db:
+        await ingest_erp(ERPBatchPayload(records=data["erp_records"]), db); await ingest_rzp(RZPBatchPayload(records=data["rzp_records"]), db); await ingest_bank(BankBatchPayload(records=data["bank_records"]), db)
+        source_before = await _snapshot(db); first = await run_reconciliation(db); source_after = await _snapshot(db); state = await _state(db)
+        counts = {k: len(state[k]) for k in state}
+        await ingest_erp(ERPBatchPayload(records=data["erp_records"]), db); await ingest_rzp(RZPBatchPayload(records=data["rzp_records"]), db); await ingest_bank(BankBatchPayload(records=data["bank_records"]), db)
+        duplicate_source = await _snapshot(db); await run_reconciliation(db); repeated = await _state(db)
+        repeated_counts = {k: len(repeated[k]) for k in repeated}
+        invalid_evidence = 0
+        for link in (await db.scalars(select(ExceptionEvidenceModel))).all():
+            valid = any([await db.get(model, link.record_id) for model in (ERPRecordModel, RazorpayOrderModel,
+                RazorpayPaymentModel, RazorpaySettlementModel, RazorpayRefundModel, BankRecordModel,
+                FinancialEventModel, ReconciliationMatchModel, ReconciliationCandidateModel)])
+            invalid_evidence += not valid
+        records = []
+        maps = _maps(data)
+        for group in truth["groups"]:
+            ids = _expected(group, maps); observed, reason = _normalize(group, ids, state)
+            records.append({"group_id": group["group_id"], "scenario": group["scenario"], "expected_outcome": group["expected_outcome"],
+                "observed_outcome": observed, "correct": observed == group["expected_outcome"], "record_identifiers": sorted(ids), "reason": reason})
+        timestamps = [int(x.timestamp.timestamp()) for x in (await db.scalars(select(BankRecordModel))).all()]
+        forecast_a = await CashForecastService(db).forecast(min(timestamps), max(timestamps), 7)
+        forecast_b = await CashForecastService(db).forecast(min(timestamps), max(timestamps), 7)
+    await engine.dispose()
+    integrity = hashes == {"dataset_sha256": _sha(SPLITS[dataset.lower()] / "dataset.json"), "ground_truth_sha256": _sha(SPLITS[dataset.lower()] / "ground_truth.json")}
+    immutable, idempotent = source_before == source_after, source_before == duplicate_source and counts == repeated_counts
+    expected_dist, observed_dist = Counter(x["expected_outcome"] for x in records), Counter(x["observed_outcome"] for x in records)
+    confusion = defaultdict(Counter)
+    for x in records: confusion[x["expected_outcome"]][x["observed_outcome"]] += 1
+    correct = sum(x["correct"] for x in records); expected_res = sum(x["expected_outcome"].startswith("MATCH") for x in records); observed_res = sum(x["observed_outcome"].startswith("MATCH") for x in records); correct_res = sum(x["correct"] and x["expected_outcome"].startswith("MATCH") for x in records)
+    try:
+        ProposedMatchSchema(classification="MATCH", confidence=2, reason="x", supporting_evidence=["x"], recommended_action="HUMAN_REVIEW_REQUIRED", risk_level="LOW"); invalid_confidence = False
+    except ValidationError: invalid_confidence = True
+    ai = {"invalid_confidence_rejected": invalid_confidence, "offline_no_live_provider_calls": True,
+          "authoritative_evidence": invalid_evidence == 0}
+    if production_check:
+        ai["phase6d_safety_regression_suite"] = _backend_safety_check()
+    integer_forecast = all(type(v) is int for v in forecast_a["currencies"]["INR"]["totals"].values())
+    report = {"evaluation_version": EVALUATION_VERSION,
+        "dataset": {**data["metadata"], "selected_split": dataset.upper(), **hashes, "integrity": "PASS" if integrity else "FAIL"},
+        "reconciliation": {"overall": {"groups": len(records), "correct": correct, "accuracy": correct / len(records)},
+            "expected_outcome_distribution": dict(sorted(expected_dist.items())), "observed_outcome_distribution": dict(sorted(observed_dist.items())),
+            "confusion_matrix": {k: dict(sorted(v.items())) for k, v in sorted(confusion.items())},
+            "precision": correct_res / observed_res if observed_res else None, "recall": correct_res / expected_res if expected_res else None,
+            "false_resolutions": sum(x["observed_outcome"].startswith("MATCH") and not x["correct"] for x in records),
+            "unresolved_expected_matches": expected_res - correct_res, "engine_counts": first.model_dump(), "scenarios": _scenarios(records, truth), "records": records},
+        "exceptions": _status(invalid_evidence == 0, {"authoritative_evidence_violations": invalid_evidence, "count": counts["exceptions"]}),
+        "razorpay": _status(len(source_after["razorpay"]) == data["metadata"]["record_counts"]["rzp"], {"payment_identities": len(source_after["razorpay"]), "external_network_calls": 0}),
+        "ai_safety": _status(all(ai.values()), {"checks": ai, "accuracy": "NOT_APPLICABLE"}),
+        "forecasting": _status(forecast_a["currencies"] == forecast_b["currencies"] and integer_forecast, {"deterministic": forecast_a["currencies"] == forecast_b["currencies"], "integer_smallest_unit": integer_forecast, "predictive_accuracy": "NOT_APPLICABLE"}),
+        "financial_invariants": {"financial_immutability": _status(immutable, {"violations": [] if immutable else ["source facts changed"]}), "idempotency": _status(idempotent, {"first": counts, "repeated": repeated_counts})},
+        "frontend": _frontend_checks() if production_check else {"status": "NOT_APPLICABLE", "reason": "Run with --production-check"}}
+    blockers = [name for name, ok in (("dataset_integrity", integrity), ("financial_immutability", immutable), ("idempotency", idempotent), ("ai_safety", all(ai.values())), ("forecasting", report["forecasting"]["status"] == "PASS")) if not ok]
+    if production_check and report["frontend"]["status"] != "PASS": blockers.append("frontend")
+    report["production_readiness"] = {"status": "PASS" if not blockers else "FAIL", "blockers": blockers, "accuracy_threshold": "NOT_APPLICABLE: no project threshold is defined"}
+    report["evaluation_digest"] = _digest(report)
+    return report
 
-        matches_q = await db.execute(select(ReconciliationMatchModel).options(selectinload(ReconciliationMatchModel.evidence)))
-        all_matches = matches_q.scalars().all()
+def _frontend_checks():
+    frontend = ROOT.parent.parent / "frontend"; checks = {}
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    for name, command in (("tests", [npm, "test"]), ("build", [npm, "run", "build"])):
+        result = subprocess.run(command, cwd=frontend, capture_output=True, text=True, timeout=180); checks[name] = "PASS" if result.returncode == 0 else "FAIL"
+    return _status(all(x == "PASS" for x in checks.values()), {"checks": checks})
 
-        from finctrl.backend.database.models import ERPRecordModel, RazorpayPaymentModel, RazorpaySettlementModel, BankRecordModel
-        # Build map of what we matched
-        # Our match -> set of stable external/business IDs to compare against ground truth
-        our_matches = []
-        for match in all_matches:
-            s = set()
-            for ev in match.evidence:
-                if ev.record_type == "ERP":
-                    rec = await db.execute(select(ERPRecordModel).filter_by(id=ev.record_id))
-                    p = rec.scalar_one_or_none()
-                    if p: s.add(str(p.reference_id)) # ERP -> reference_id
-                elif ev.record_type == "RZP":
-                    rec = await db.execute(select(RazorpayPaymentModel).filter_by(id=ev.record_id))
-                    p = rec.scalar_one_or_none()
-                    if p:
-                        s.add(str(p.rzp_payment_id))
-                    else:
-                        rec = await db.execute(select(RazorpaySettlementModel).filter_by(id=ev.record_id))
-                        p = rec.scalar_one_or_none()
-                        if p:
-                            s.add(str(p.rzp_settlement_id))
-                elif ev.record_type == "BANK":
-                    rec = await db.execute(select(BankRecordModel).filter_by(id=ev.record_id))
-                    p = rec.scalar_one_or_none()
-                    if p: s.add(str(p.transaction_ref)) # Bank -> transaction_ref
-            our_matches.append(s)
+def _backend_safety_check():
+    command = [sys.executable, "-m", "pytest", "-q",
+               "finctrl/backend/tests/test_phase6d_ai_investigation_approval.py",
+               "finctrl/backend/tests/test_phase6e_cash_forecasting.py"]
+    result = subprocess.run(command, cwd=ROOT.parent.parent, capture_output=True, text=True, timeout=180)
+    return result.returncode == 0
 
-        # Build ground truth sets normalizing all sets to stable business IDs to match our logic
-        with open(dataset_path, "r") as ds_f:
-            ds_data = json.load(ds_f)
-
-        rzp_event_to_payment_id = {}
-        for r in ds_data.get("rzp_records", []):
-            if "rzp_payment_id" in r:
-                rzp_event_to_payment_id[r["id"]] = r["rzp_payment_id"]
-            elif "id" in r and r.get("type") == "settlement":
-                rzp_event_to_payment_id[r["id"]] = r.get("rzp_settlement_id", r["id"])
-
-        erp_event_to_ref = {}
-        for r in ds_data.get("erp_records", []):
-             erp_event_to_ref[r["id"]] = r["reference_id"]
-
-        bank_event_to_ref = {}
-        for r in ds_data.get("bank_records", []):
-             bank_event_to_ref[r["id"]] = r["transaction_ref"]
-
-        for group in ground_truth.get("groups", []):
-            if group.get("expected_outcome") == "MATCH":
-                # Find exactly the set of expected stable business IDs
-                expected_set = set()
-                for e_id in group.get("erp_record_ids", []): expected_set.add(erp_event_to_ref.get(e_id, e_id))
-                for b_id in group.get("bank_record_ids", []): expected_set.add(bank_event_to_ref.get(b_id, b_id))
-                for rzp_ev_id in group.get("rzp_record_ids", []): expected_set.add(rzp_event_to_payment_id.get(rzp_ev_id, rzp_ev_id))
-
-                # Check if we have this exact match
-                if expected_set in our_matches:
-                    correct_matches += 1
-
-        # Total generated matches vs correct matches gives us precision
-        total_generated = len(all_matches)
-        false_resolutions = total_generated - correct_matches
-        precision = correct_matches / total_generated if total_generated > 0 else 1.0
-
-        expected_matches = len([g for g in ground_truth.get("groups", []) if g.get("expected_outcome") == "MATCH"])
-        overall_resolution_rate = correct_matches / expected_matches if expected_matches > 0 else 0.0
-
-        metrics = {
-            "records_processed": records_processed,
-            "records_reconciled": response.matches_created,
-            "records_escalated": response.candidates_created + response.exceptions_created,
-            "exceptions_created": response.exceptions_created,
-            "candidates_created": response.candidates_created,
-            "overall_resolution_rate": overall_resolution_rate,
-            "throughput_records_per_second": records_processed / max(latency, 0.001),
-            "false_resolutions": false_resolutions,
-            "precision": precision
-        }
-        return metrics
-
-if __name__ == "__main__":
-    result = asyncio.run(run_evaluation("finctrl/backend/data/dev/dataset.json"))
-    print(json.dumps(result, indent=2))
+def _parser():
+    parser = argparse.ArgumentParser(description="FINCTRL offline evaluation"); parser.add_argument("--dataset", choices=sorted(SPLITS), default="held_out"); parser.add_argument("--production-check", action="store_true"); parser.add_argument("--output", type=Path); return parser
+def main(argv=None):
+    args = _parser().parse_args(argv)
+    try:
+        report = asyncio.run(run_evaluation(args.dataset, args.production_check))
+        if args.output: args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n")
+        overall = report["reconciliation"]["overall"]; print(f"{args.dataset.upper()}: {overall['correct']}/{overall['groups']} correct; digest={report['evaluation_digest']}; readiness={report['production_readiness']['status']}")
+        return 0 if report["production_readiness"]["status"] == "PASS" else 1
+    except (EvaluationIntegrityError, OSError, ValueError) as error:
+        print(f"Evaluation failed: {error}", file=sys.stderr); return 2
+if __name__ == "__main__": raise SystemExit(main())

@@ -301,8 +301,12 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
     inserted = 0
     skipped = 0
 
+    payment_settlements: dict[str, list] = {}
     for record in payload.records:
-        existing = await db.execute(select(RazorpayPaymentModel).filter_by(rzp_payment_id=record.rzp_payment_id))
+        is_refund = record.type.lower() == "refund"
+        identity_model = RazorpayRefundModel if is_refund else RazorpayPaymentModel
+        identity_field = "rzp_refund_id" if is_refund else "rzp_payment_id"
+        existing = await db.execute(select(identity_model).filter_by(**{identity_field: record.rzp_payment_id}))
         if existing.scalar_one_or_none():
             skipped += 1
             continue
@@ -322,6 +326,20 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
         )
         db.add(event_model)
         await db.flush()
+
+        if is_refund:
+            db.add(RazorpayRefundModel(
+                source_event_id=event_model.id,
+                rzp_refund_id=record.rzp_payment_id,
+                rzp_payment_id="legacy_refund_group:" + (record.rzp_settlement_id or record.rzp_payment_id),
+                amount=record.gross_amount,
+                currency="INR",
+                status=record.status,
+                receipt=record.order_receipt,
+                created_at_ts=int(record.timestamp.timestamp()),
+            ))
+            inserted += 1
+            continue
 
         # Create Order
         om = RazorpayOrderModel(
@@ -351,20 +369,26 @@ async def ingest_rzp(payload: RZPBatchPayload, db: AsyncSession = Depends(get_db
         )
         db.add(pm)
 
-        # Create Settlement if ID exists
         if record.rzp_settlement_id:
-            sm = RazorpaySettlementModel(
-                source_event_id=event_model.id,
-                rzp_settlement_id=record.rzp_settlement_id,
-                amount=record.net_amount,
-                status="processed",
-                fees=record.fee,
-                tax=record.tax,
-                created_at_ts=int(record.timestamp.timestamp())
-            )
-            db.add(sm)
+            payment_settlements.setdefault(record.rzp_settlement_id, []).append((record, event_model.id))
 
         inserted += 1
+
+    for settlement_id, members in payment_settlements.items():
+        existing = await db.scalar(select(RazorpaySettlementModel).where(
+            RazorpaySettlementModel.rzp_settlement_id == settlement_id))
+        if existing is not None:
+            continue
+        records = [member[0] for member in members]
+        db.add(RazorpaySettlementModel(
+            source_event_id=members[0][1],
+            rzp_settlement_id=settlement_id,
+            amount=sum(record.net_amount for record in records),
+            status="processed",
+            fees=sum(record.fee for record in records),
+            tax=sum(record.tax for record in records),
+            created_at_ts=max(int(record.timestamp.timestamp()) for record in records),
+        ))
 
     await db.commit()
     return BulkIngestResponse(received=received, inserted=inserted, skipped=skipped, errors=0)
