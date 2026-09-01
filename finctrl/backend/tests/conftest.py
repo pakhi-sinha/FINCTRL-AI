@@ -4,6 +4,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["APP_MODE"] = "test"
 os.environ["ADMIN_API_KEY"] = "test_admin_key"
 os.environ["READ_ONLY_API_KEY"] = "test_readonly_key"
+os.environ["RAZORPAY_WEBHOOK_SECRET"] = "test_webhook_secret"
 
 import pytest
 import pytest_asyncio

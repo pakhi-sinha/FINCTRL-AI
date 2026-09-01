@@ -14,7 +14,7 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from finctrl.backend.database.database import async_session_maker
 
 @pytest.mark.asyncio
-async def test_agent_investigate_and_resolve(db_setup):
+async def test_legacy_agent_exception_remains_advisory(db_setup):
     async with async_session_maker() as db:
         candidate_id = uuid4()
         candidate = ReconciliationCandidateModel(id=candidate_id, candidate_type="TEST", evidence_payload={"erp_ids": []})
@@ -22,11 +22,6 @@ async def test_agent_investigate_and_resolve(db_setup):
         await db.commit()
 
         provider = MockAIProvider()
-        # For an auto-resolve, the ONE_TO_ONE match needs valid ERP/RZP in evidence, else it gets rejected by Policy.
-        # Let's check exactly how it's handled.
-        # Oh, if it rejects, we DO log POLICY_REJECTED in apply_action. But maybe it didn't get there?
-        # Let's use a simpler match that just gets EXCEPTIOn or HUMAN_REVIEW, or NO_MATCH.
-        # Actually NO_MATCH decision becomes EXCEPTION. Let's do that.
         provider.next_message = ChatCompletionMessage(
             content='{"classification": "EXCEPTION", "recommended_action": "EXCEPTION", "risk_level": "HIGH", "supporting_evidence": [], "confidence": 0.96, "reason": "mock valid"}',
             role="assistant"
@@ -37,17 +32,18 @@ async def test_agent_investigate_and_resolve(db_setup):
 
         res = await db.execute(select(ReconciliationCandidateModel).filter_by(id=candidate_id))
         c = res.scalar_one()
-        assert c.status == "EXCEPTION" # because NO_MATCH
+        assert c.status == "HUMAN_REVIEW_REQUIRED"
 
         res = await db.execute(select(AuditLogModel).filter_by(entity_id=candidate_id))
         logs = res.scalars().all()
         actions = [log.action for log in logs]
         assert "AI_INVESTIGATION_STARTED" in actions
         assert "AI_PROPOSED" in actions
-        assert "EXCEPTION_CREATED" in actions
+        assert "LEGACY_EXCEPTION_ADVISORY" in actions
+        assert not (await db.scalars(select(ExceptionModel).filter_by(record_id=candidate_id))).all()
 
 @pytest.mark.asyncio
-async def test_agent_investigate_and_exception(db_setup):
+async def test_legacy_agent_low_confidence_cannot_create_exception(db_setup):
     async with async_session_maker() as db:
         candidate_id = uuid4()
         candidate = ReconciliationCandidateModel(id=candidate_id, candidate_type="TEST", evidence_payload={"erp_ids": []})
@@ -65,8 +61,8 @@ async def test_agent_investigate_and_exception(db_setup):
 
         res = await db.execute(select(ReconciliationCandidateModel).filter_by(id=candidate_id))
         c = res.scalar_one()
-        assert c.status == "EXCEPTION"
+        assert c.status == "HUMAN_REVIEW_REQUIRED"
 
         res = await db.execute(select(ExceptionModel).filter_by(record_id=candidate_id))
         exc = res.scalars().all()
-        assert len(exc) == 1
+        assert len(exc) == 0

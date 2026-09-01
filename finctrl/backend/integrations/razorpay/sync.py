@@ -16,8 +16,16 @@ from finctrl.backend.database.models import (
     financial_event_id, razorpay_source_event_key,
 )
 from finctrl.backend.integrations.razorpay.client import RazorpayClient
+from finctrl.backend.reconciliation.reporting import assert_timestamps_not_closed
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitized_sync_error(error):
+    """Return bounded operational detail without persisting provider text."""
+    if isinstance(error, RazorpayIdentityConflict):
+        return "RazorpayIdentityConflict: immutable provider identity conflict"
+    return f"{type(error).__name__}: Razorpay synchronization failed"[:2000]
 
 
 class RazorpayIdentityConflict(ValueError):
@@ -107,6 +115,7 @@ class RazorpaySyncService:
             utr=raw.get("utr"), created_at_ts=raw.get("created_at", 0))
 
     async def _persist(self, resource, raw, stats):
+        await assert_timestamps_not_closed(self.db, [raw.get("created_at")], operation="Razorpay synchronization")
         model, id_field, _ = RESOURCE_CONFIG[resource]
         provider_id = raw.get("id")
         event, event_created = await self._ledger(resource, raw)
@@ -153,7 +162,7 @@ class RazorpaySyncService:
                 self.db.add(AuditLogModel(entity_type="RAZORPAY_SYNC", entity_id=error.entity_id,
                     action="IMMUTABLE_IDENTITY_CONFLICT", actor="SYSTEM",
                     changes={"resource": resource, "provider_id": error.provider_id}))
-            await self._record_state(stats, "FAILED", str(error), [])
+            await self._record_state(stats, "FAILED", _sanitized_sync_error(error), [])
             await self.db.commit(); raise
         finally:
             stats.duration_ms = int((monotonic() - started) * 1000)

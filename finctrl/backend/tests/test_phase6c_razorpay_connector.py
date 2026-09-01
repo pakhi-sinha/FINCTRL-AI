@@ -335,6 +335,9 @@ async def test_partial_sync_failure_rolls_back_resource_records(sync_db):
     with pytest.raises(RazorpayMalformedResponse):
         await RazorpaySyncService(sync_db, RazorpayClient(sdk)).sync_resource("orders")
     assert await sync_db.scalar(select(func.count(RazorpayOrderModel.id))) == 0
+    state = await sync_db.scalar(select(RazorpaySyncStateModel))
+    assert state.last_status == "FAILED"
+    assert state.last_error == "RazorpayMalformedResponse: Razorpay synchronization failed"
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -43,6 +43,41 @@ def _evidence_uuid(payload, field):
         return UUID(str((payload or {}).get(field)))
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+class ClosedPeriodViolation(ValueError):
+    """A financial fact would enter an administratively closed period."""
+
+
+async def assert_timestamps_not_closed(db, timestamps, *, operation):
+    epochs = []
+    for value in timestamps:
+        if value is None:
+            continue
+        epochs.append(_epoch(value) if isinstance(value, datetime) else int(value))
+    if not epochs:
+        return
+    conditions = [
+        (ReconciliationPeriodModel.from_ts <= value) & (ReconciliationPeriodModel.to_ts >= value)
+        for value in set(epochs)
+    ]
+    period = await db.scalar(select(ReconciliationPeriodModel).where(
+        ReconciliationPeriodModel.status == "CLOSED", or_(*conditions)))
+    if period is not None:
+        raise ClosedPeriodViolation(
+            f"{operation} contains a record in closed reconciliation period {period.id}")
+
+
+async def assert_window_not_closed(db, from_ts, to_ts, *, operation):
+    lower = from_ts if from_ts is not None else -9223372036854775808
+    upper = to_ts if to_ts is not None else 9223372036854775807
+    period = await db.scalar(select(ReconciliationPeriodModel).where(
+        ReconciliationPeriodModel.status == "CLOSED",
+        ReconciliationPeriodModel.to_ts >= lower,
+        ReconciliationPeriodModel.from_ts <= upper,
+    ))
+    if period is not None:
+        raise ClosedPeriodViolation(f"{operation} overlaps closed reconciliation period {period.id}")
 
 
 class ReconciliationReportingService:
@@ -86,18 +121,24 @@ class ReconciliationReportingService:
         return timestamp is not None and period.from_ts <= timestamp <= period.to_ts
 
     async def _populations(self, period):
-        erps = [x for x in (await self.db.scalars(select(ERPRecordModel))).all()
-                if self._in_period(period, _epoch(x.timestamp))]
-        orders = [x for x in (await self.db.scalars(select(RazorpayOrderModel))).all()
-                  if self._in_period(period, x.created_at_ts)]
-        payments = [x for x in (await self.db.scalars(select(RazorpayPaymentModel))).all()
-                    if self._in_period(period, x.created_at_ts)]
-        refunds = [x for x in (await self.db.scalars(select(RazorpayRefundModel))).all()
-                   if self._in_period(period, x.created_at_ts)]
-        settlements = [x for x in (await self.db.scalars(select(RazorpaySettlementModel))).all()
-                       if self._in_period(period, x.created_at_ts)]
-        banks = [x for x in (await self.db.scalars(select(BankRecordModel))).all()
-                 if self._in_period(period, _epoch(x.timestamp))]
+        start = datetime.fromtimestamp(period.from_ts, timezone.utc)
+        end = datetime.fromtimestamp(period.to_ts, timezone.utc)
+        erps = list((await self.db.scalars(select(ERPRecordModel).where(
+            ERPRecordModel.timestamp >= start, ERPRecordModel.timestamp <= end))).all())
+        orders = list((await self.db.scalars(select(RazorpayOrderModel).where(
+            RazorpayOrderModel.created_at_ts >= period.from_ts,
+            RazorpayOrderModel.created_at_ts <= period.to_ts))).all())
+        payments = list((await self.db.scalars(select(RazorpayPaymentModel).where(
+            RazorpayPaymentModel.created_at_ts >= period.from_ts,
+            RazorpayPaymentModel.created_at_ts <= period.to_ts))).all())
+        refunds = list((await self.db.scalars(select(RazorpayRefundModel).where(
+            RazorpayRefundModel.created_at_ts >= period.from_ts,
+            RazorpayRefundModel.created_at_ts <= period.to_ts))).all())
+        settlements = list((await self.db.scalars(select(RazorpaySettlementModel).where(
+            RazorpaySettlementModel.created_at_ts >= period.from_ts,
+            RazorpaySettlementModel.created_at_ts <= period.to_ts))).all())
+        banks = list((await self.db.scalars(select(BankRecordModel).where(
+            BankRecordModel.timestamp >= start, BankRecordModel.timestamp <= end))).all())
         return {"erp": erps, "orders": orders, "payments": payments,
                 "refunds": refunds, "settlements": settlements, "bank": banks}
 
@@ -222,6 +263,23 @@ class ReconciliationReportingService:
         self.db.add(AuditLogModel(entity_type="RECONCILIATION_PERIOD", entity_id=period.id,
             action="RECONCILIATION_PERIOD_CLOSED", actor=actor,
             changes={"run_id": readiness["source_run_id"], "correlation_id": correlation_id}))
+        await self.db.commit()
+        await self.db.refresh(period)
+        return period
+
+    async def reopen_period(self, period, *, actor, correlation_id=None, reason=None):
+        if period.status != "CLOSED":
+            raise ValueError("Only a closed period can be reopened")
+        result = await self.db.execute(update(ReconciliationPeriodModel).where(
+            ReconciliationPeriodModel.id == period.id,
+            ReconciliationPeriodModel.status == "CLOSED",
+        ).values(status="OPEN", closed_at=None, closed_by=None, latest_run_id=None))
+        if result.rowcount != 1:
+            await self.db.rollback()
+            raise ValueError("Period is no longer closed")
+        self.db.add(AuditLogModel(entity_type="RECONCILIATION_PERIOD", entity_id=period.id,
+            action="RECONCILIATION_PERIOD_REOPENED", actor=actor,
+            changes={"reason": reason, "correlation_id": correlation_id}))
         await self.db.commit()
         await self.db.refresh(period)
         return period

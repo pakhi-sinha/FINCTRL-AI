@@ -4,15 +4,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: finctrl
-      POSTGRES_PASSWORD: finctrl_dev_password
-      POSTGRES_DB: finctrl
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U finctrl"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,16 +24,17 @@ services:
       APP_MODE: production
 
       # Database
-      DATABASE_URL: postgresql+asyncpg://finctrl:finctrl_dev_password@postgres:5432/finctrl
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
 
       # API Security
-      ADMIN_API_KEY: ${ADMIN_API_KEY:-admin_secret_key_change_me}
-      READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:-readonly_secret_key_change_me}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:?READ_ONLY_API_KEY is required}
 
       # Razorpay
-      RAZORPAY_MODE: ${RAZORPAY_MODE:-test}
-      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
-      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      RAZORPAY_MODE: ${RAZORPAY_MODE:?RAZORPAY_MODE is required}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:?RAZORPAY_KEY_ID is required}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:?RAZORPAY_KEY_SECRET is required}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:?RAZORPAY_WEBHOOK_SECRET is required}
 
       # AI Provider
       AI_PROVIDER: ${AI_PROVIDER:-gemini}
@@ -44,6 +43,12 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/free}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      RECONCILIATION_LEASE_SECONDS: ${RECONCILIATION_LEASE_SECONDS:-600}
+      RECONCILIATION_HEARTBEAT_SECONDS: ${RECONCILIATION_HEARTBEAT_SECONDS:-120}
+      AI_INVESTIGATION_LEASE_SECONDS: ${AI_INVESTIGATION_LEASE_SECONDS:-300}
+      AI_INVESTIGATION_HEARTBEAT_SECONDS: ${AI_INVESTIGATION_HEARTBEAT_SECONDS:-60}
+      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-120}
+      WEBHOOK_HEARTBEAT_SECONDS: ${WEBHOOK_HEARTBEAT_SECONDS:-30}
 
     depends_on:
       postgres:
@@ -55,6 +60,36 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  recovery-worker:
+    build: .
+    command: ["python", "-m", "finctrl.backend.recovery.worker"]
+    environment:
+      APP_MODE: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:?READ_ONLY_API_KEY is required}
+      RAZORPAY_MODE: ${RAZORPAY_MODE:?RAZORPAY_MODE is required}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:?RAZORPAY_KEY_ID is required}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:?RAZORPAY_KEY_SECRET is required}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:?RAZORPAY_WEBHOOK_SECRET is required}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/free}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      RECONCILIATION_LEASE_SECONDS: ${RECONCILIATION_LEASE_SECONDS:-600}
+      RECONCILIATION_HEARTBEAT_SECONDS: ${RECONCILIATION_HEARTBEAT_SECONDS:-120}
+      AI_INVESTIGATION_LEASE_SECONDS: ${AI_INVESTIGATION_LEASE_SECONDS:-300}
+      AI_INVESTIGATION_HEARTBEAT_SECONDS: ${AI_INVESTIGATION_HEARTBEAT_SECONDS:-60}
+      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-120}
+      WEBHOOK_HEARTBEAT_SECONDS: ${WEBHOOK_HEARTBEAT_SECONDS:-30}
+      RECOVERY_POLL_SECONDS: ${RECOVERY_POLL_SECONDS:-15}
+      RECOVERY_BATCH_SIZE: ${RECOVERY_BATCH_SIZE:-25}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

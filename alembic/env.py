@@ -13,6 +13,7 @@ from alembic import context
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import our models
+from finctrl.backend.config import settings
 from finctrl.backend.database.models import Base
 
 # this is the Alembic Config object, which provides
@@ -28,13 +29,7 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Get database URL from environment, with fallback to PostgreSQL default
-database_url = os.environ.get(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/finctrl"
-)
-
-# Override the sqlalchemy.url in alembic config with environment variable
-config.set_main_option("sqlalchemy.url", database_url)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
