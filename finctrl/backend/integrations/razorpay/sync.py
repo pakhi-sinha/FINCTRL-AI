@@ -34,6 +34,12 @@ class RazorpayIdentityConflict(ValueError):
         self.entity_id, self.provider_id = entity_id, provider_id
 
 
+def _provider_value(raw, field, default):
+    """Use the model's domain default when Razorpay omits a field or returns null."""
+    value = raw.get(field)
+    return default if value is None else value
+
+
 @dataclass
 class SyncStatistics:
     resource_type: str
@@ -94,25 +100,33 @@ class RazorpaySyncService:
     def _values(resource, raw):
         if resource == "orders":
             return dict(rzp_order_id=raw["id"], receipt=raw.get("receipt") or raw["id"],
-                amount=raw.get("amount", 0), amount_paid=raw.get("amount_paid", 0),
-                amount_due=raw.get("amount_due", 0), currency=raw.get("currency", "INR"),
-                status=raw.get("status", ""), created_at_ts=raw.get("created_at", 0))
+                amount=_provider_value(raw, "amount", 0),
+                amount_paid=_provider_value(raw, "amount_paid", 0),
+                amount_due=_provider_value(raw, "amount_due", 0),
+                currency=_provider_value(raw, "currency", "INR"),
+                status=_provider_value(raw, "status", ""),
+                created_at_ts=_provider_value(raw, "created_at", 0))
         if resource == "payments":
             return dict(rzp_payment_id=raw["id"], rzp_order_id=raw.get("order_id"),
-                rzp_settlement_id=raw.get("settlement_id"), amount=raw.get("amount", 0),
-                currency=raw.get("currency", "INR"), status=raw.get("status", ""),
-                method=raw.get("method"), amount_refunded=raw.get("amount_refunded", 0),
-                refund_status=raw.get("refund_status"), captured=int(bool(raw.get("captured", False))),
+                rzp_settlement_id=raw.get("settlement_id"), amount=_provider_value(raw, "amount", 0),
+                currency=_provider_value(raw, "currency", "INR"),
+                status=_provider_value(raw, "status", ""),
+                method=raw.get("method"), refund_status=raw.get("refund_status"),
+                captured=int(bool(raw.get("captured", False))),
                 email=raw.get("email"), contact=raw.get("contact"), fee=raw.get("fee"), tax=raw.get("tax"),
                 error_code=raw.get("error_code"), error_description=raw.get("error_description"),
-                created_at_ts=raw.get("created_at", 0))
+                created_at_ts=_provider_value(raw, "created_at", 0),
+                amount_refunded=_provider_value(raw, "amount_refunded", 0))
         if resource == "refunds":
             return dict(rzp_refund_id=raw["id"], rzp_payment_id=raw.get("payment_id"),
-                amount=raw.get("amount", 0), currency=raw.get("currency", "INR"),
-                status=raw.get("status", ""), receipt=raw.get("receipt"), created_at_ts=raw.get("created_at", 0))
-        return dict(rzp_settlement_id=raw["id"], amount=raw.get("amount", 0),
-            status=raw.get("status", ""), fees=raw.get("fees", 0), tax=raw.get("tax", 0),
-            utr=raw.get("utr"), created_at_ts=raw.get("created_at", 0))
+                amount=_provider_value(raw, "amount", 0),
+                currency=_provider_value(raw, "currency", "INR"),
+                status=_provider_value(raw, "status", ""), receipt=raw.get("receipt"),
+                created_at_ts=_provider_value(raw, "created_at", 0))
+        return dict(rzp_settlement_id=raw["id"], amount=_provider_value(raw, "amount", 0),
+            status=_provider_value(raw, "status", ""), fees=_provider_value(raw, "fees", 0),
+            tax=_provider_value(raw, "tax", 0), utr=raw.get("utr"),
+            created_at_ts=_provider_value(raw, "created_at", 0))
 
     async def _persist(self, resource, raw, stats):
         await assert_timestamps_not_closed(self.db, [raw.get("created_at")], operation="Razorpay synchronization")

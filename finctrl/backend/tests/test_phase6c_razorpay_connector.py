@@ -2,6 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -200,6 +201,34 @@ async def test_incremental_sync_persists_provenance_and_state(sync_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("optional_totals", [
+    {"amount_paid": None, "amount_due": None},
+    {},
+    {"amount_paid": 40, "amount_due": 60},
+])
+async def test_order_optional_totals_are_normalized(sync_db, optional_totals):
+    payload = item("order_optional_totals", receipt="r", **optional_totals)
+    await RazorpaySyncService(sync_db, RazorpayClient(SDK([[payload]]))).sync_resource("orders")
+    order = await sync_db.scalar(select(RazorpayOrderModel))
+    assert order.amount == 100
+    assert order.amount_paid == (40 if optional_totals.get("amount_paid") == 40 else 0)
+    assert order.amount_due == (60 if optional_totals.get("amount_due") == 60 else 0)
+
+
+@pytest.mark.asyncio
+async def test_null_order_totals_are_idempotent_financial_facts(sync_db):
+    payload = item("order_null_totals_repeated", receipt="r", amount_paid=None, amount_due=None)
+    service = RazorpaySyncService(sync_db, RazorpayClient(SDK([[payload]])))
+    first = await service.sync_resource("orders")
+    second = await service.sync_resource("orders")
+    order = await sync_db.scalar(select(RazorpayOrderModel))
+    assert first["created"] == 1 and second["duplicates_ignored"] == 1
+    assert order.amount_paid == 0 and order.amount_due == 0
+    assert await sync_db.scalar(select(func.count(RazorpayOrderModel.id))) == 1
+    assert await sync_db.scalar(select(func.count(FinancialEventModel.id))) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resource,model,payload", [
     ("payments", RazorpayPaymentModel, item("pay_1", order_id="o1", captured=True)),
     ("refunds", RazorpayRefundModel, item("rfnd_1", payment_id="pay_1")),
@@ -347,3 +376,16 @@ async def test_sync_endpoint_requires_admin():
         denied = await client.post("/razorpay/sync/orders", headers={"X-API-Key": settings.READ_ONLY_API_KEY})
         missing = await client.post("/razorpay/sync/orders")
     assert denied.status_code == 403 and missing.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sync_endpoint_accepts_explicit_null_order_totals():
+    sdk = SDK()
+    sdk.order.pages = [[item("order_route_null_totals", receipt="r", amount_paid=None, amount_due=None)]]
+    sdk.payment.pages = sdk.refund.pages = sdk.settlement.pages = [[]]
+    transport = ASGITransport(app=app)
+    with patch("finctrl.backend.integrations.razorpay.sync.RazorpayClient", return_value=RazorpayClient(sdk)):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/razorpay/sync", headers={"X-API-Key": settings.ADMIN_API_KEY})
+    assert response.status_code == 200
+    assert response.json()["orders"]["created"] == 1

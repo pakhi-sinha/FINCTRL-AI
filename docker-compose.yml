@@ -15,13 +15,42 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      APP_MODE: ${APP_MODE:?APP_MODE is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:?READ_ONLY_API_KEY is required}
+      RAZORPAY_MODE: ${RAZORPAY_MODE:?RAZORPAY_MODE is required}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:?RAZORPAY_KEY_ID is required}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:?RAZORPAY_KEY_SECRET is required}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:?RAZORPAY_WEBHOOK_SECRET is required}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/free}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      RECONCILIATION_LEASE_SECONDS: ${RECONCILIATION_LEASE_SECONDS:-600}
+      RECONCILIATION_HEARTBEAT_SECONDS: ${RECONCILIATION_HEARTBEAT_SECONDS:-120}
+      AI_INVESTIGATION_LEASE_SECONDS: ${AI_INVESTIGATION_LEASE_SECONDS:-300}
+      AI_INVESTIGATION_HEARTBEAT_SECONDS: ${AI_INVESTIGATION_HEARTBEAT_SECONDS:-60}
+      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-120}
+      WEBHOOK_HEARTBEAT_SECONDS: ${WEBHOOK_HEARTBEAT_SECONDS:-30}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
+    command: ["uvicorn", "finctrl.backend.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     environment:
       # Application
-      APP_MODE: production
+      APP_MODE: ${APP_MODE:?APP_MODE is required}
 
       # Database
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
@@ -51,11 +80,11 @@ services:
       WEBHOOK_HEARTBEAT_SECONDS: ${WEBHOOK_HEARTBEAT_SECONDS:-30}
 
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -64,8 +93,10 @@ services:
   recovery-worker:
     build: .
     command: ["python", "-m", "finctrl.backend.recovery.worker"]
+    healthcheck:
+      disable: true
     environment:
-      APP_MODE: production
+      APP_MODE: ${APP_MODE:?APP_MODE is required}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:?READ_ONLY_API_KEY is required}
@@ -88,8 +119,8 @@ services:
       RECOVERY_POLL_SECONDS: ${RECOVERY_POLL_SECONDS:-15}
       RECOVERY_BATCH_SIZE: ${RECOVERY_BATCH_SIZE:-25}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:

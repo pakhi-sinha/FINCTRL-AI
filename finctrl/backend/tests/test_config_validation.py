@@ -17,6 +17,25 @@ def test_test_mode_allows_missing_credentials():
     # No validation errors should occur in test mode even with missing credentials
 
 
+def test_test_mode_allows_razorpay_test_mode():
+    """Local Docker/test mode accepts Razorpay's test environment."""
+    from finctrl.backend.config import Settings
+
+    test_settings = Settings(APP_MODE="test", RAZORPAY_MODE="test")
+
+    test_settings.validate_production_config()
+
+
+def test_production_mode_rejects_razorpay_test_mode():
+    """Production validation must reject Razorpay's test environment."""
+    from finctrl.backend.config import Settings
+
+    test_settings = Settings(APP_MODE="production", RAZORPAY_MODE="test")
+
+    with pytest.raises(SystemExit):
+        test_settings.validate_production_config()
+
+
 def test_production_mode_requires_postgresql():
     """Production mode should reject SQLite database."""
     # This test verifies the validation logic without actually setting production mode
