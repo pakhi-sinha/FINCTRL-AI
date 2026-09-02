@@ -302,7 +302,10 @@ class WebhookProcessor:
             om = RazorpayOrderModel(
                 source_event_id=event_model.id,
                 rzp_order_id=order_data.get("id"),
-                receipt=order_data.get("receipt"),
+                # Razorpay may legitimately return null here. Match API-sync
+                # normalization with the stable provider order ID as the
+                # non-null reconciliation fallback.
+                receipt=order_data.get("receipt") or order_data.get("id"),
                 amount=order_data.get("amount", 0),
                 amount_due=order_data.get("amount_due", 0),
                 status=order_data.get("status"),

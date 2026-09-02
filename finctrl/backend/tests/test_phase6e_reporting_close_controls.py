@@ -15,7 +15,8 @@ from finctrl.backend.database.models import (
     ReconciliationMatchModel, ReconciliationPeriodModel, ReconciliationRunModel,
 )
 from finctrl.backend.reconciliation.reporting import (
-    ReconciliationReportingService, reconciliation_period_key,
+    ClosedPeriodViolation, ReconciliationReportingService,
+    assert_window_not_closed, reconciliation_period_key,
 )
 
 
@@ -33,6 +34,58 @@ async def add_run(db, key, from_ts, to_ts, status="SUCCEEDED", requested_at=None
         requested_at=requested_at or datetime.now(timezone.utc),
         started_at=datetime.now(timezone.utc), completed_at=datetime.now(timezone.utc))
     db.add(run); await db.flush(); return run
+
+
+async def add_closed_period(db, from_ts=100, to_ts=200):
+    period = ReconciliationPeriodModel(
+        period_key=reconciliation_period_key(from_ts, to_ts),
+        from_ts=from_ts,
+        to_ts=to_ts,
+        status="CLOSED",
+    )
+    db.add(period)
+    await db.commit()
+    return period
+
+
+@pytest.mark.asyncio
+async def test_closed_window_guard_with_no_bounds_checks_for_any_closed_period(report_env):
+    async with report_env() as db:
+        period = await add_closed_period(db)
+        with pytest.raises(
+            ClosedPeriodViolation,
+            match=f"reconciliation run overlaps closed reconciliation period {period.id}",
+        ):
+            await assert_window_not_closed(db, None, None, operation="reconciliation run")
+
+
+@pytest.mark.asyncio
+async def test_closed_window_guard_with_only_from_bound(report_env):
+    async with report_env() as db:
+        await add_closed_period(db)
+        await assert_window_not_closed(db, 2_147_483_647, None, operation="reconciliation run")
+        with pytest.raises(ClosedPeriodViolation):
+            await assert_window_not_closed(db, 200, None, operation="reconciliation run")
+
+
+@pytest.mark.asyncio
+async def test_closed_window_guard_with_only_to_bound(report_env):
+    async with report_env() as db:
+        await add_closed_period(db)
+        await assert_window_not_closed(db, None, -2_147_483_648, operation="reconciliation run")
+        with pytest.raises(ClosedPeriodViolation):
+            await assert_window_not_closed(db, None, 100, operation="reconciliation run")
+
+
+@pytest.mark.asyncio
+async def test_closed_window_guard_with_both_bounds(report_env):
+    async with report_env() as db:
+        await add_closed_period(db)
+        await assert_window_not_closed(
+            db, -2_147_483_648, 99, operation="reconciliation run")
+        with pytest.raises(ClosedPeriodViolation):
+            await assert_window_not_closed(
+                db, 200, 2_147_483_647, operation="reconciliation run")
 
 
 @pytest.mark.asyncio

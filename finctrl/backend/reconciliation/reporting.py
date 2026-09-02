@@ -69,13 +69,13 @@ async def assert_timestamps_not_closed(db, timestamps, *, operation):
 
 
 async def assert_window_not_closed(db, from_ts, to_ts, *, operation):
-    lower = from_ts if from_ts is not None else -9223372036854775808
-    upper = to_ts if to_ts is not None else 9223372036854775807
-    period = await db.scalar(select(ReconciliationPeriodModel).where(
-        ReconciliationPeriodModel.status == "CLOSED",
-        ReconciliationPeriodModel.to_ts >= lower,
-        ReconciliationPeriodModel.from_ts <= upper,
-    ))
+    query = select(ReconciliationPeriodModel).where(
+        ReconciliationPeriodModel.status == "CLOSED")
+    if from_ts is not None:
+        query = query.where(ReconciliationPeriodModel.to_ts >= from_ts)
+    if to_ts is not None:
+        query = query.where(ReconciliationPeriodModel.from_ts <= to_ts)
+    period = await db.scalar(query)
     if period is not None:
         raise ClosedPeriodViolation(f"{operation} overlaps closed reconciliation period {period.id}")
 

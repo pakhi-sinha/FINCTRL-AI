@@ -13,7 +13,7 @@ from sqlalchemy import select
 from finctrl.backend.api.main import app
 from finctrl.backend.config import settings
 from finctrl.backend.database.database import async_session_maker, init_db
-from finctrl.backend.database.models import FinancialEventModel
+from finctrl.backend.database.models import FinancialEventModel, RazorpayOrderModel
 from finctrl.backend.integrations.webhook_processor import WebhookProcessor
 
 @pytest_asyncio.fixture(autouse=True)
@@ -76,6 +76,55 @@ async def test_webhook_processing_failure():
         resp = await ac.post("/webhooks/razorpay", content=body, headers={"x-razorpay-event-id": "ev_broken", "x-razorpay-signature": valid_sig})
         assert resp.status_code == 500
         assert resp.json()["detail"] == "Processing failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_receipt", "expected_receipt"),
+    ((None, "order_null_receipt"), ("merchant-receipt-123", "merchant-receipt-123")),
+)
+async def test_order_paid_normalizes_null_receipt_and_preserves_real_receipt(
+    provider_receipt, expected_receipt
+):
+    settings.RAZORPAY_WEBHOOK_SECRET = "test_secret"
+    order_id = "order_null_receipt" if provider_receipt is None else "order_real_receipt"
+    payload = {
+        "event": "order.paid",
+        "payload": {
+            "order": {
+                "entity": {
+                    "id": order_id,
+                    "receipt": provider_receipt,
+                    "amount": 1000,
+                    "amount_due": 0,
+                    "status": "paid",
+                    "created_at": 1,
+                }
+            }
+        },
+    }
+    body = json.dumps(payload).encode()
+    signature = hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/webhooks/razorpay",
+            content=body,
+            headers={
+                "x-razorpay-event-id": f"event_{order_id}",
+                "x-razorpay-signature": signature,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    async with async_session_maker() as db:
+        order = await db.scalar(
+            select(RazorpayOrderModel).where(RazorpayOrderModel.rzp_order_id == order_id)
+        )
+        assert order is not None
+        assert order.receipt == expected_receipt
 
 
 @pytest.mark.asyncio
