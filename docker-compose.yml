@@ -58,6 +58,7 @@ services:
       # API Security
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       READ_ONLY_API_KEY: ${READ_ONLY_API_KEY:?READ_ONLY_API_KEY is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
 
       # Razorpay
       RAZORPAY_MODE: ${RAZORPAY_MODE:?RAZORPAY_MODE is required}

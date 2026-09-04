@@ -36,6 +36,23 @@ def test_ready_endpoint_public():
         assert response.json() == {"status": "ready"}
 
 
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://localhost:5174"])
+def test_local_frontend_origins_are_allowed(origin):
+    """Configured Vite development origins should pass CORS preflight."""
+    with TestClient(app) as client:
+        response = client.options(
+            "/metrics",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-API-Key",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_missing_api_key():
     """Endpoints should return 401 when X-API-Key header is missing."""
     with TestClient(app) as client:
