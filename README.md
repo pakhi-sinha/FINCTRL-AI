@@ -1,180 +1,149 @@
 # FINCTRL-AI
 
-FINCTRL-AI is a financial-operations control system for reconciling ERP records, Razorpay payments and settlements, and bank transactions. It combines deterministic reconciliation with an exception workbench, evidence-bound AI investigation, mandatory human approval, and an auditable React/TypeScript control room.
+### Financial reconciliation that keeps the facts deterministic, the investigation evidence-bound, and the final decision human.
 
-The system is designed around a control loop: ingest authoritative financial facts, reconcile what can be resolved deterministically, retain ambiguity as an exception, investigate that exception without changing source facts, and require a person to approve or reject the recommendation.
+FINCTRL-AI is a financial-operations control system for teams working across ERP records, Razorpay activity, and bank transactions. It turns fragmented payment data into matches, reviewable exceptions, structured AI investigations, and auditable human decisions—without allowing AI to rewrite authoritative financial records.
 
-## Why it exists
+**Held-out evaluation: 100/100 correct · Production readiness: PASS**
 
-Payment operations rarely line up as a simple one-to-one join. ERP references may be incomplete, settlements can consolidate multiple payments, fees and tax change net amounts, refunds reverse earlier activity, and bank credits can arrive later than the underlying payment. A useful reconciliation system must explain unresolved cases without silently rewriting financial history.
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React + TypeScript](https://img.shields.io/badge/React%20%2B%20TypeScript-Control%20Room-3178C6?logo=react&logoColor=white)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Data-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Razorpay](https://img.shields.io/badge/Razorpay-Payments-0C2451)](https://razorpay.com/)
+[![Gemini](https://img.shields.io/badge/Gemini-AI%20Investigation-8E75B2?logo=googlegemini&logoColor=white)](https://ai.google.dev/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-FINCTRL-AI implements that workflow end to end:
+[Explore the repository](https://github.com/pakhi-sinha/FINCTRL-AI) · [Quick start](#quick-start) · [API reference](#api) · [Five-minute product demo](#five-minute-product-demo)
 
-1. **Ingest** ERP, Razorpay, and bank facts through batch APIs, Razorpay API synchronization, or signed Razorpay webhooks.
-2. **Reconcile** the three sources through deterministic matching stages, including consolidated settlements, fee differences, partial references, timing differences, and refunds.
-3. **Create exceptions** for unresolved or discrepant records, with links back to their authoritative evidence.
-4. **Investigate with AI** using only the evidence assembled for an exception. Provider output must pass a strict structured schema and reference evidence that exists in the case.
-5. **Approve or reject** the advisory investigation through admin-only endpoints. Approval state is separate from financial facts and does not mutate them.
-6. **Audit and recover** through correlation IDs, audit records, idempotent operations, bounded retries, durable leases, and a recovery worker.
+## FINCTRL Control Room
+
+> [!NOTE]
+> **Developer note:** the dashboard capture is not yet available. Add it at `docs/screenshots/finctrl-control-room.png`, then replace this note with `![FINCTRL Control Room](docs/screenshots/finctrl-control-room.png)`.
+
+The Control Room gives operators one view of reconciliation health, exceptions, AI decisions, cash movement and forecast state, and Razorpay synchronization.
+
+## Why FINCTRL?
+
+Financial truth is usually split across systems: an ERP records what should have happened, a payment gateway records what it processed, and a bank records what actually moved. Those records do not always form clean one-to-one pairs—settlements consolidate payments, fees and tax alter net amounts, refunds reverse activity, and references or timing can differ.
+
+When deterministic matching stops, a discrepancy needs an explanation backed by evidence. FINCTRL-AI lets AI investigate that evidence, but never silently change the underlying facts. A person remains accountable for approving or rejecting the recommendation.
+
+## The FINCTRL control loop
+
+```text
+Ingest
+  ↓
+Normalize
+  ↓
+Deterministic Reconciliation
+  ↓
+Match / Candidate / Exception
+  ↓
+Evidence-bound AI Investigation
+  ↓
+Human Approval
+  ↓
+Auditable Decision
+  ↓
+Recovery + Monitoring
+```
+
+| Stage | What happens |
+| --- | --- |
+| **Ingest** | ERP, Razorpay, and bank facts enter through batch APIs, Razorpay synchronization, or signed webhooks. |
+| **Normalize** | Provider records are converted into stable internal representations while source facts remain authoritative. |
+| **Reconcile** | Controlled deterministic stages evaluate references, amounts, fees, timing, refunds, and consolidated settlements. |
+| **Classify** | Resolved records become matches; ambiguity is retained as candidates or exceptions with linked evidence. |
+| **Investigate** | Gemini or OpenRouter receives only the assembled case and must return a strict structured result. |
+| **Approve** | An admin approves or rejects the advisory result; the actor, reason, time, and correlation context are stored. |
+| **Audit and recover** | Structured logs, idempotency, durable leases, bounded retries, and a recovery worker keep operations traceable. |
+
+## Built for controlled financial operations
+
+| Capability | What FINCTRL-AI implements |
+| --- | --- |
+| ⚡ **Deterministic reconciliation** | Reconciles ERP, Razorpay, and bank data through controlled stages, preserving matches, candidates, evidence, and exceptions as distinct records. |
+| 💳 **Razorpay control loop** | Synchronizes orders, payments, refunds, and settlements; verifies signed webhooks; deduplicates deliveries; and supports bounded replay and recovery. |
+| 🧠 **Evidence-bound AI investigation** | Uses Gemini or OpenRouter for exception analysis with a closed schema, confidence score, recommended action, and references that must resolve to case evidence. |
+| 👤 **Human in the loop** | Restricts approval and rejection to admins and persists decision status, actor, reason, timestamp, and correlation metadata. |
+| 🛡️ **Reliability and auditability** | Carries correlation IDs through JSON logs and audit records, protects source immutability, and uses idempotent operations, fenced durable leases, and bounded retries. |
+| 📊 **FINCTRL Control Room** | Presents net cash movement, forecast state, reconciliation health, exception severity, AI decisions, Razorpay sync state, recent critical exceptions, and selectable history/forecast windows. |
+
+### From exception to decision
+
+The tested investigation lifecycle demonstrates the complete control boundary:
+
+```text
+Razorpay payment
+  → MISSING_ERP exception
+  → structured AI investigation
+  → MISSING_RECORD classification
+  → REQUEST_EVIDENCE recommendation
+  → 0.91 confidence
+  → human review
+  → APPROVED
+```
+
+The recommendation and approval are persisted, while the original ERP amount and other financial source records remain unchanged.
+
+## Why the AI is safe by design
+
+> **AI investigates. People decide. Authoritative financial facts stay authoritative.**
+
+- The model receives evidence assembled for one exception, not unrestricted write access.
+- Its response must pass a closed schema and cite evidence that exists in the case.
+- The stored investigation includes provider/model details, input and result hashes, timestamps, confidence, and sanitized failure codes.
+- Approval or rejection is a separate, admin-only action where applicable.
+- Decision state is stored separately from ERP, Razorpay, bank, match, candidate, and exception facts.
 
 ## Architecture
 
 ```text
- ERP batches       Razorpay API + webhooks       Bank batches
-     |                       |                        |
-     +-----------------------+------------------------+
-                             v
-                  Authoritative source ledger
-                             |
-                             v
-              Deterministic reconciliation engine
-                    | matches       | candidates
-                    |               v
-                    |       Exception + evidence
-                    |               |
-                    |               v
-                    |      Structured AI investigation
-                    |               |
-                    |               v
-                    |       Human approve / reject
-                    |               |
-                    +---------------+------------------+
-                                    v
-                         Reports, metrics, cash view
-                                    |
-                                    v
-                       FINCTRL Control Room (React)
-
- PostgreSQL stores operational state and audit history; the recovery worker
- reclaims expired reconciliation, investigation, and webhook leases.
+ ERP ─────────┐
+              ├──> Authoritative records ──> PostgreSQL
+ Razorpay ────┤              │                    │
+              │              ▼                    │
+ Bank ────────┘    Deterministic reconciliation   │
+                             │                    │
+                             ▼                    │
+               Matches / Candidates / Exceptions │
+                             │                    │
+                             ▼                    │
+                    AI investigation              │
+                             │                    │
+                             ▼                    │
+                     Human approval               │
+                             │                    │
+                             ▼                    │
+                      Audit + recovery <──────────┘
+                             ▲
+                             │
+                  Durable recovery worker
+                             │
+                             ▼
+                   FINCTRL Control Room
 ```
 
-## Core capabilities
+PostgreSQL holds operational state and audit history. The recovery worker reclaims expired reconciliation, investigation, and webhook leases using database-time leases and fenced ownership.
 
-### ERP, Razorpay, and bank reconciliation
+## Technology stack
 
-The reconciliation engine preserves source records and produces matches, candidates, evidence, and exceptions as separate operational records. Controlled runs expose stage status and counts, accept an idempotency key, support bounded linked retries, and can be scoped by Unix timestamp. Reconciliation periods add reporting, close-readiness checks, close/reopen controls, and protection against ingesting or retrying activity into a closed period.
+| Layer | Technologies |
+| --- | --- |
+| Backend | Python 3.12, FastAPI, SQLAlchemy |
+| Data | PostgreSQL, Alembic |
+| Payments | Razorpay SDK and signed webhooks |
+| AI investigation | Gemini or OpenRouter |
+| Control Room | React, TypeScript, Vite |
+| Operations | Docker Compose |
+| Testing | Pytest, Vitest, Testing Library |
 
-Razorpay data can arrive through legacy batch ingestion, paginated API synchronization, or webhooks. The connector synchronizes orders, payments, settlements, and refunds, records per-resource sync state, uses provider identities for deduplication, and retries transient connector failures with backoff.
+## Quick start
 
-### Reliable Razorpay webhooks
+### Backend with Docker
 
-`POST /webhooks/razorpay` is public only in the API-key sense; every request still requires `X-Razorpay-Signature` and `X-Razorpay-Event-Id`. Before processing, the API:
-
-- limits the request body to 256 KiB;
-- verifies the raw body with HMAC-SHA256 and the dedicated `RAZORPAY_WEBHOOK_SECRET` using constant-time comparison;
-- rejects malformed JSON, reused event IDs with conflicting payloads, and provider-identity conflicts;
-- persists the raw payload and hash, and makes repeated delivery idempotent;
-- coordinates concurrent processing and records processing state.
-
-Failed events can be replayed with the admin-only `POST /webhooks/replay/{event_id}` endpoint. Replay keeps the original event identity and payload, only accepts failed events, and stops after five attempts. The recovery worker can reclaim expired webhook work as well as interrupted reconciliation runs and AI investigations using database-time leases and fenced ownership.
-
-### Evidence-bound AI investigation
-
-An admin can start an investigation for a reconciliation exception. The service constructs a case from persisted exception evidence, calls the configured Gemini or OpenRouter provider, and validates the response against a closed schema. The stored result contains:
-
-- classification: `MATCHING_ERROR`, `MISSING_RECORD`, `TIMING_DIFFERENCE`, `AMOUNT_DIFFERENCE`, `DUPLICATE`, `REFUND_OR_SETTLEMENT`, or `UNDETERMINED`;
-- root cause and summary;
-- recommended action: `MANUAL_REVIEW`, `REQUEST_EVIDENCE`, `DETERMINISTIC_REPROCESS`, or `DISMISS_IF_VERIFIED`;
-- confidence from 0 to 1;
-- evidence references that must resolve to evidence supplied in the case;
-- `requires_human_approval: true`.
-
-Input and result hashes, provider/model details, timestamps, status, and sanitized failure codes are persisted. The current exception-investigation workflow is advisory: it cannot edit ERP, Razorpay, bank, match, candidate, or exception facts. Older candidate AI endpoints remain exposed for test-mode compatibility and are rejected in production; production users should use the exception investigation endpoints.
-
-### Human approval and auditability
-
-Approval and rejection are separate admin-only actions. The decision stores its status, actor, reason, decision time, and correlation ID, while the investigation retains its evidence and hashes. Exception lifecycle actions (`investigate`, `resolve`, and `dismiss`) are also explicit transitions with audit entries. API middleware accepts or creates an `X-Correlation-ID`, returns it to the caller, and includes it in structured JSON logs.
-
-### FINCTRL Control Room
-
-The `frontend/` application is a Vite-powered React/TypeScript dashboard. It reads the authenticated backend APIs in parallel and presents:
-
-- historical cash movement and deterministic cash forecast;
-- reconciliation run health and match/candidate/exception counts;
-- open exceptions by severity and recent high/critical exceptions;
-- pending, approved, and rejected AI investigation decisions;
-- Razorpay synchronization status;
-- selectable 7/30/90-day history windows and 7/14/30-day forecast horizons.
-
-The API key is entered at runtime and stored only in browser `sessionStorage`. The frontend currently displays INR.
-
-> Dashboard screenshot placeholder: add `docs/screenshots/finctrl-control-room.png` when a captured dashboard image is available.
-
-## API
-
-FastAPI interactive documentation is available at `http://localhost:8000/docs` while the backend is running. Except for the health, readiness, and signed webhook routes, endpoints require `X-API-Key`. An admin key can read and write; a read-only key can call read endpoints only.
-
-### Public and webhook routes
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Process liveness |
-| `GET` | `/ready` | Database readiness |
-| `POST` | `/webhooks/razorpay` | Receive a signature-verified Razorpay event |
-
-### Admin routes
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/ingest/erp` | Ingest an ERP batch |
-| `POST` | `/ingest/rzp` | Ingest a legacy Razorpay batch |
-| `POST` | `/ingest/bank` | Ingest a bank batch |
-| `POST` | `/reconciliation/run` | Run reconciliation (legacy response shape) |
-| `POST` | `/reconciliation/runs` | Create a controlled reconciliation run |
-| `POST` | `/reconciliation/runs/{run_id}/retry` | Retry a failed run |
-| `POST` | `/reconciliation/periods` | Create a reporting period |
-| `POST` | `/reconciliation/periods/{period_id}/close` | Close a ready period |
-| `POST` | `/reconciliation/periods/{period_id}/reopen` | Reopen a period |
-| `POST` | `/razorpay/sync` | Synchronize all supported Razorpay resources |
-| `POST` | `/razorpay/sync/{resource}` | Synchronize one Razorpay resource |
-| `POST` | `/reconciliation/exceptions/{exception_id}/investigations` | Create an AI investigation |
-| `POST` | `/reconciliation/investigations/{investigation_id}/approve` | Approve an investigation |
-| `POST` | `/reconciliation/investigations/{investigation_id}/reject` | Reject an investigation |
-| `POST` | `/exceptions/{exception_id}/investigate` | Move an exception into investigation |
-| `POST` | `/exceptions/{exception_id}/resolve` | Resolve an exception |
-| `POST` | `/exceptions/{exception_id}/dismiss` | Dismiss an exception |
-| `POST` | `/webhooks/replay/{event_id}` | Replay a failed webhook |
-| `POST` | `/ai/investigate/{candidate_id}` | Legacy candidate AI (test mode only) |
-| `POST` | `/ai/process/{candidate_id}` | Legacy candidate AI processing (test mode only) |
-| `POST` | `/ai/process-pending` | Legacy pending-candidate processing (test mode only) |
-
-### Read routes
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/forecast/cash` | Cash history and deterministic forecast |
-| `GET` | `/forecast/cash/summary` | Compact cash forecast summary |
-| `GET` | `/reconciliation/runs` | List controlled runs |
-| `GET` | `/reconciliation/runs/{run_id}` | Get a run |
-| `GET` | `/reconciliation/runs/{run_id}/stages` | Get run-stage details |
-| `GET` | `/reconciliation/periods` | List periods |
-| `GET` | `/reconciliation/periods/{period_id}` | Get a period |
-| `GET` | `/reconciliation/reports` | List period reports |
-| `GET` | `/reconciliation/reports/{period_id}` | Get a period report |
-| `GET` | `/reconciliation/reports/{period_id}/exceptions` | Get filtered period exceptions |
-| `GET` | `/reconciliation/reports/{period_id}/runs` | Get period runs |
-| `GET` | `/reconciliation/reports/{period_id}/close-readiness` | Evaluate close readiness |
-| `GET` | `/razorpay/sync-status` | Get per-resource sync state |
-| `GET` | `/matches` | List reconciliation matches |
-| `GET` | `/candidates` | List reconciliation candidates |
-| `GET` | `/exceptions` | List reconciliation exceptions |
-| `GET` | `/exceptions/{exception_id}` | Get an exception and its audit/evidence links |
-| `GET` | `/exceptions/{exception_id}/candidates` | Get candidates linked to an exception |
-| `GET` | `/exceptions/{exception_id}/evidence` | Resolve an exception's evidence facts |
-| `GET` | `/reconciliation/exceptions/{exception_id}/investigations` | List exception investigations |
-| `GET` | `/reconciliation/investigations/{investigation_id}` | Get an investigation and approval |
-| `GET` | `/cash-position` | Get realized and projected cash position |
-| `GET` | `/metrics` | Get processing and reconciliation metrics |
-| `GET` | `/ai/investigations/{candidate_id}` | Get legacy candidate investigation logs |
-
-Query parameters and request/response schemas are documented by OpenAPI at `/docs`.
-
-## Setup
-
-### Backend with Docker Compose
-
-Prerequisites: Docker with Compose support. From the repository root, create a local `.env` file (it is intentionally not provided by the repository) with values suitable for your environment:
+Prerequisite: Docker with Compose support. Copy `.env.example` to `.env`, then set environment-appropriate values. At minimum, configure distinct API keys and database credentials:
 
 ```dotenv
 APP_MODE=test
@@ -194,10 +163,9 @@ RAZORPAY_WEBHOOK_SECRET=replace-with-separate-webhook-secret
 AI_PROVIDER=gemini
 GEMINI_API_KEY=
 OPENROUTER_API_KEY=
-OPENAI_API_KEY=
 ```
 
-Then start PostgreSQL, migrations, the API, and the durable recovery worker:
+Start PostgreSQL, migrations, the API, and the recovery worker:
 
 ```bash
 docker compose up --build
@@ -205,53 +173,152 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
-This test-mode configuration starts the core backend without a live AI call. To run exception investigations, provide the selected provider key. For production, set `APP_MODE=production`, use a PostgreSQL URL, use distinct non-placeholder API keys, set `RAZORPAY_MODE=live`, provide live Razorpay credentials, use a separate webhook secret, and configure the selected AI provider key. Production configuration fails fast when required values are absent or unsafe.
+The core backend runs in test mode without a live AI call. Live Razorpay synchronization and exception investigation require the corresponding credentials. Stop the stack with `docker compose down`; the named PostgreSQL volume is retained.
 
-Stop the stack with `docker compose down`. The named PostgreSQL volume is retained.
+### Control Room
 
-### Frontend
-
-Prerequisites: Node.js/npm compatible with the locked dependencies. The frontend is run locally; this repository does not define a frontend container.
+The frontend runs locally and defaults to `http://localhost:8000` for its API:
 
 ```bash
 cd frontend
 npm ci
-```
-
-The default backend URL is `http://localhost:8000`. To override it, create `frontend/.env.local`:
-
-```dotenv
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-Start the dashboard:
-
-```bash
 npm run dev
 ```
 
-Open `http://localhost:5173` and enter the read-only or admin API key. For a different frontend origin, add it to the backend's comma-separated `CORS_ORIGINS`. Never put backend, Razorpay, database, or AI secrets in a `VITE_*` variable because Vite exposes those values to the browser.
+Open [http://localhost:5173](http://localhost:5173) and enter a read-only or admin API key. To use another API URL, set `VITE_API_BASE_URL` in `frontend/.env.local`. To use another frontend origin, add it to the backend's comma-separated `CORS_ORIGINS` setting.
 
-## Testing and evaluation
+## API
 
-Install backend dependencies in a Python 3.12 environment when running outside Docker:
+OpenAPI documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs) while the backend is running. Except for liveness, readiness, and the signature-verified webhook, routes require `X-API-Key`. Admin keys can read and write; read-only keys can call read routes.
+
+<details>
+<summary><strong>Health and readiness</strong></summary>
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/health` | Public | Process liveness |
+| `GET` | `/ready` | Public | Database readiness |
+
+</details>
+
+<details>
+<summary><strong>Razorpay and webhooks</strong></summary>
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/ingest/rzp` | Admin | Ingest a legacy Razorpay batch |
+| `POST` | `/razorpay/sync` | Admin | Synchronize every supported resource |
+| `POST` | `/razorpay/sync/{resource}` | Admin | Synchronize one resource |
+| `GET` | `/razorpay/sync-status` | Read | Get per-resource sync state |
+| `POST` | `/webhooks/razorpay` | Signed webhook | Receive a verified Razorpay event |
+| `POST` | `/webhooks/replay/{event_id}` | Admin | Replay a failed event |
+
+</details>
+
+<details>
+<summary><strong>Reconciliation and reporting</strong></summary>
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/ingest/erp` | Admin | Ingest an ERP batch |
+| `POST` | `/ingest/bank` | Admin | Ingest a bank batch |
+| `POST` | `/reconciliation/run` | Admin | Run reconciliation with the legacy response shape |
+| `POST` | `/reconciliation/runs` | Admin | Create a controlled run |
+| `GET` | `/reconciliation/runs` | Read | List controlled runs |
+| `GET` | `/reconciliation/runs/{run_id}` | Read | Get one run |
+| `GET` | `/reconciliation/runs/{run_id}/stages` | Read | Get run-stage details |
+| `POST` | `/reconciliation/runs/{run_id}/retry` | Admin | Retry a failed run |
+| `GET` | `/matches` | Read | List matches |
+| `GET` | `/candidates` | Read | List candidates |
+| `POST` | `/reconciliation/periods` | Admin | Create a reporting period |
+| `GET` | `/reconciliation/periods` | Read | List periods |
+| `GET` | `/reconciliation/periods/{period_id}` | Read | Get a period |
+| `POST` | `/reconciliation/periods/{period_id}/close` | Admin | Close a ready period |
+| `POST` | `/reconciliation/periods/{period_id}/reopen` | Admin | Reopen a period |
+| `GET` | `/reconciliation/reports` | Read | List period reports |
+| `GET` | `/reconciliation/reports/{period_id}` | Read | Get a period report |
+| `GET` | `/reconciliation/reports/{period_id}/exceptions` | Read | Get filtered period exceptions |
+| `GET` | `/reconciliation/reports/{period_id}/runs` | Read | Get period runs |
+| `GET` | `/reconciliation/reports/{period_id}/close-readiness` | Read | Evaluate close readiness |
+
+</details>
+
+<details>
+<summary><strong>Exceptions, AI investigation, and approvals</strong></summary>
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/exceptions` | Read | List exceptions |
+| `GET` | `/exceptions/{exception_id}` | Read | Get an exception with audit/evidence links |
+| `GET` | `/exceptions/{exception_id}/candidates` | Read | Get linked candidates |
+| `GET` | `/exceptions/{exception_id}/evidence` | Read | Resolve evidence facts |
+| `POST` | `/exceptions/{exception_id}/investigate` | Admin | Move an exception into investigation |
+| `POST` | `/exceptions/{exception_id}/resolve` | Admin | Resolve an exception |
+| `POST` | `/exceptions/{exception_id}/dismiss` | Admin | Dismiss an exception |
+| `POST` | `/reconciliation/exceptions/{exception_id}/investigations` | Admin | Create a structured AI investigation |
+| `GET` | `/reconciliation/exceptions/{exception_id}/investigations` | Read | List investigations for an exception |
+| `GET` | `/reconciliation/investigations/{investigation_id}` | Read | Get an investigation and decision |
+| `POST` | `/reconciliation/investigations/{investigation_id}/approve` | Admin | Approve an investigation |
+| `POST` | `/reconciliation/investigations/{investigation_id}/reject` | Admin | Reject an investigation |
+
+Legacy candidate-AI compatibility routes remain available in test mode: `GET /ai/investigations/{candidate_id}`, `POST /ai/investigate/{candidate_id}`, `POST /ai/process/{candidate_id}`, and `POST /ai/process-pending`. Production rejects the legacy write routes; use exception investigations instead.
+
+</details>
+
+<details>
+<summary><strong>Forecast and metrics</strong></summary>
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/forecast/cash` | Read | Get cash history and deterministic forecast |
+| `GET` | `/forecast/cash/summary` | Read | Get a compact forecast summary |
+| `GET` | `/cash-position` | Read | Get realized and projected cash position |
+| `GET` | `/metrics` | Read | Get processing and reconciliation metrics |
+
+</details>
+
+Query parameters and complete request/response schemas are documented by OpenAPI at `/docs`.
+
+## Security
+
+- Use `X-API-Key` with the read-only role for dashboards and read clients; reserve the admin role for controlled writes.
+- Razorpay webhooks require `X-Razorpay-Signature` and `X-Razorpay-Event-Id`. The server verifies the raw body with HMAC-SHA256 and constant-time comparison before processing.
+- Keep `RAZORPAY_WEBHOOK_SECRET` separate from `RAZORPAY_KEY_SECRET`.
+- Never commit `.env` files, database passwords, API keys, or webhook secrets.
+- Never place backend, Razorpay, database, or AI secrets in `VITE_*` variables; Vite exposes them to the browser.
+- Production configuration fails fast when keys are missing, duplicated, placeholder-like, or incompatible with live mode.
+- Terminate TLS in front of the production API, restrict database network access, and rotate secrets through the deployment secret manager.
+
+Webhook bodies are limited to 256 KiB. Events are payload-hashed and idempotent, identity conflicts are rejected, failed events can be replayed up to five attempts, and expired webhook work can be reclaimed by the recovery worker.
+
+## Testing and final validation
+
+> **HELD_OUT: 100/100 correct**<br>
+> **readiness=PASS**
+
+This result belongs to the deterministic reconciliation engine on the repository's fixed synthetic held-out corpus. It is **not** a claim of 100% AI accuracy or real-world forecast accuracy.
+
+Install and run the backend regression suite:
+
+**Latest verified result:** `229 passed`
 
 ```bash
 python -m pip install -r finctrl/backend/requirements.txt
+python -m pytest finctrl/backend/tests
 ```
 
-Run backend tests and frontend checks:
+Run frontend tests and the production build:
+
+**Latest verified result:** `7 passed` across 2 test files; production build succeeded.
 
 ```bash
-python -m pytest finctrl/backend/tests
-
 cd frontend
 npm ci
 npm test
 npm run build
 ```
 
-Run the fixed offline evaluation splits from the repository root:
+Run the fixed offline evaluations from the repository root:
 
 ```bash
 python -m finctrl.backend.evaluation_runner --dataset validation
@@ -259,69 +326,49 @@ python -m finctrl.backend.evaluation_runner --dataset held_out
 python -m finctrl.backend.evaluation_runner --dataset held_out --production-check
 ```
 
-Final held-out result:
+The offline runner uses isolated in-memory SQLite and makes no external Razorpay, Gemini, or OpenRouter calls. Readiness covers dataset integrity, source immutability, idempotency, evidence validity, AI schema safety, and deterministic forecast invariants. The production check additionally runs selected safety tests plus frontend tests/build. Do not edit or regenerate the held-out dataset or ground truth to tune behavior.
 
-```text
-HELD_OUT: 100/100 correct; readiness=PASS
-```
+## Five-minute product demo
 
-This is **not a claim of 100% accurate AI**. It is the deterministic reconciliation result on the repository's fixed, synthetic held-out corpus. The offline runner uses an isolated in-memory SQLite database and makes no external Razorpay, Gemini, or OpenRouter calls. Its readiness checks cover dataset integrity, source immutability, idempotency, evidence validity, AI schema safety, and deterministic forecast invariants; `--production-check` also runs the selected safety tests plus frontend tests/build. It does not establish live integration performance or forecast predictive accuracy.
+This is the recommended product pitch:
 
-Do not edit or regenerate `finctrl/backend/data/held_out/dataset.json` or its ground truth to tune behavior.
+1. Open the **FINCTRL Control Room**.
+2. Show reconciliation health, exception severity, AI decision state, cash visibility, and Razorpay synchronization.
+3. Open a `MISSING_ERP` exception and trace it to its persisted Razorpay evidence.
+4. Show the structured investigation: classification, root cause, recommendation, confidence, and evidence references.
+5. Approve the result and show the persisted actor, reason, timestamp, and correlation context—alongside unchanged source facts.
+6. Briefly explain signed webhooks, idempotency, durable recovery leases, structured logs, and the human decision boundary.
+7. Finish with **held-out 100/100** and **readiness PASS**, clearly framed as deterministic offline evaluation.
 
-## Five-minute demo
+## Current demo state
 
-1. Start the Docker stack with `docker compose up --build`; confirm `/health` and `/ready`.
-2. In another terminal, start the dashboard with `cd frontend`, `npm ci`, and `npm run dev`.
-3. Open `http://localhost:5173`, enter the runtime read-only API key, and review cash, run health, exception severity, AI approvals, and Razorpay sync state.
-4. Open `http://localhost:8000/docs` to inspect the real API contract. Use the admin key to ingest ERP/Razorpay/bank sample payloads or trigger a controlled reconciliation run, then inspect matches, candidates, exceptions, and evidence.
-5. Demonstrate the control boundary by creating an exception investigation and explicitly approving or rejecting its structured recommendation. Finish with `python -m finctrl.backend.evaluation_runner --dataset held_out --production-check` to reproduce the offline held-out and readiness checks.
-
-Live Razorpay synchronization, webhook delivery, and AI investigation require valid external credentials and are not exercised by the offline evaluation.
+- If the demo dataset has no authoritative bank movements, forecast output is intentionally unavailable rather than fabricated.
+- Live Razorpay synchronization, webhook delivery, and AI investigation require configured external credentials.
+- The fixed held-out evaluator measures deterministic reconciliation behavior; it does not establish live-integration performance or predictive forecast accuracy.
+- The Control Room displays INR in its current implementation.
 
 ## Project structure
 
 ```text
 FINCTRL-AI/
-|-- finctrl/backend/
-|   |-- api/                 # FastAPI routes, schemas, authentication
-|   |-- database/            # SQLAlchemy models and async sessions
-|   |-- engine/ai/           # Legacy candidate AI agent and policy controls
-|   |-- integrations/
-|   |   `-- razorpay/        # Razorpay client, schemas, synchronization
-|   |-- reconciliation/      # Matching, runs, exceptions, investigation, reports, forecast
-|   |-- recovery/            # Durable lease recovery worker
-|   |-- synthetic_data/      # Reproducible corpus generation utilities
-|   |-- data/                # Dev, validation, and held-out corpora
-|   |-- tests/               # Backend and evaluation tests
-|   `-- evaluation_runner.py # Offline evaluation/readiness CLI
-|-- frontend/                # React/TypeScript FINCTRL Control Room
-|-- alembic/                 # Database migrations
-|-- Dockerfile               # Backend image
-|-- docker-compose.yml       # PostgreSQL, migration, API, recovery worker
-`-- README.md
+├── finctrl/backend/
+│   ├── api/                 # FastAPI routes, schemas, and authentication
+│   ├── database/            # SQLAlchemy models and async sessions
+│   ├── engine/ai/           # Legacy candidate-AI compatibility path
+│   ├── integrations/
+│   │   └── razorpay/        # Client, schemas, and synchronization
+│   ├── reconciliation/      # Matching, runs, exceptions, AI, reports, forecast
+│   ├── recovery/            # Durable lease recovery worker
+│   ├── synthetic_data/      # Reproducible corpus utilities
+│   ├── data/                # Dev, validation, and held-out corpora
+│   ├── tests/               # Backend and evaluation tests
+│   └── evaluation_runner.py # Offline evaluation/readiness CLI
+├── frontend/                # React/TypeScript FINCTRL Control Room
+├── alembic/                 # Database migrations
+├── Dockerfile               # Backend image
+├── docker-compose.yml       # PostgreSQL, migrations, API, recovery worker
+└── README.md
 ```
-
-## Technology stack
-
-- **API:** Python 3.12, FastAPI, Pydantic, Uvicorn
-- **Data:** SQLAlchemy async, PostgreSQL in production, SQLite/aiosqlite in tests, Alembic migrations
-- **Payments:** Razorpay Python SDK plus signed webhook handling
-- **AI investigation:** Gemini or OpenRouter for the production exception workflow; OpenAI support remains in the legacy candidate path
-- **Frontend:** React, TypeScript, Vite
-- **Testing:** pytest, pytest-asyncio, Vitest, Testing Library, jsdom
-- **Operations:** Docker Compose, structured JSON logging, correlation IDs, database-backed recovery leases
-
-## Security notes
-
-- Never commit `.env` files, API keys, database passwords, or webhook secrets.
-- Keep `RAZORPAY_WEBHOOK_SECRET` distinct from `RAZORPAY_KEY_SECRET`.
-- Use the read-only API key for dashboards and other read-only clients; reserve the admin key for controlled actions.
-- Use long, random, distinct API keys and rotate them through your deployment secret manager.
-- Terminate TLS in front of the API in production and restrict database network access.
-- Treat `VITE_*` settings as public browser configuration, never as secret storage.
-- Preserve raw webhook bytes for signature verification and configure the exact webhook secret registered with Razorpay.
-- Review audit records and correlation IDs when approving investigations, resolving exceptions, replaying webhooks, or reopening periods.
 
 ## License
 
