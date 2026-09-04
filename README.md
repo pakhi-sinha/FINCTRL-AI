@@ -18,10 +18,9 @@ FINCTRL-AI is a financial-operations control system for teams working across ERP
 
 ## FINCTRL Control Room
 
-> [!NOTE]
-> **Developer note:** the dashboard capture is not yet available. Add it at `docs/screenshots/finctrl-control-room.png`, then replace this note with `![FINCTRL Control Room](docs/screenshots/finctrl-control-room.png)`.
+![FINCTRL Control Room](docs/screenshots/finctrl-control-room.png)
 
-The Control Room gives operators one view of reconciliation health, exceptions, AI decisions, cash movement and forecast state, and Razorpay synchronization.
+*The FINCTRL Control Room brings reconciliation health, exceptions, AI decisions, cash visibility, and Razorpay synchronization into one operational view.*
 
 ## Why FINCTRL?
 
@@ -286,7 +285,7 @@ Query parameters and complete request/response schemas are documented by OpenAPI
 - Keep `RAZORPAY_WEBHOOK_SECRET` separate from `RAZORPAY_KEY_SECRET`.
 - Never commit `.env` files, database passwords, API keys, or webhook secrets.
 - Never place backend, Razorpay, database, or AI secrets in `VITE_*` variables; Vite exposes them to the browser.
-- Production configuration fails fast when keys are missing, duplicated, placeholder-like, or incompatible with live mode.
+- Production configuration fails fast when keys are missing, duplicated, unsafe, or incompatible with live mode.
 - Terminate TLS in front of the production API, restrict database network access, and rotate secrets through the deployment secret manager.
 
 Webhook bodies are limited to 256 KiB. Events are payload-hashed and idempotent, identity conflicts are rejected, failed events can be replayed up to five attempts, and expired webhook work can be reclaimed by the recovery worker.
