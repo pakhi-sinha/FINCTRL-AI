@@ -1,9 +1,12 @@
+import os
+os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///:memory:'
+
 import pytest
 import os
 import json
 from decimal import Decimal
-from synthetic_data.generator import SyntheticDataEngine, Config
-from schemas.models import FinctrlDataset, GroundTruthDataset
+from finctrl.backend.synthetic_data.generator import SyntheticDataEngine, Config
+from finctrl.backend.schemas.models import FinctrlDataset, GroundTruthDataset
 
 def test_generator_reproducibility():
     config1 = Config(seed=42, dataset_sizes={"TEST": 10})
